@@ -19,6 +19,58 @@ const db = firebase.firestore();
 const googleProvider = new firebase.auth.GoogleAuthProvider();
 const DEFAULT_MASCOT_URL = 'https://i.ibb.co/dJszqfYR/1000311864.png';
 
+// ===== SOUND EFFECTS (Web Audio API - أصوات مولدة برمجيًا، مفيش ملفات خارجية عشان تشتغل فورًا وأوفلاين) =====
+const SFX = (function() {
+  let ctx = null;
+  let muted = localStorage.getItem('capo_sound_muted') === '1';
+  function getCtx() {
+    if (!ctx) {
+      try { ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (e) { return null; }
+    }
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }
+  // نغمة واحدة: تردد، مدة بالثانية، نوع الموجة، حجم الصوت
+  function tone(freq, dur, type, vol, delay) {
+    if (muted) return;
+    const c = getCtx();
+    if (!c) return;
+    const t0 = c.currentTime + (delay || 0);
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(vol || 0.12, t0 + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(gain);
+    gain.connect(c.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+  return {
+    isMuted: () => muted,
+    toggle: function() {
+      muted = !muted;
+      localStorage.setItem('capo_sound_muted', muted ? '1' : '0');
+      if (!muted) this.click();
+      return muted;
+    },
+    click: () => tone(700, 0.06, 'sine', 0.08),
+    notify: () => tone(880, 0.12, 'sine', 0.1),
+    success: () => { tone(660, 0.1, 'sine', 0.12); tone(990, 0.16, 'sine', 0.12, 0.09); },
+    error: () => { tone(220, 0.18, 'sawtooth', 0.09); tone(160, 0.22, 'sawtooth', 0.08, 0.1); },
+    win: () => { tone(523, 0.14, 'triangle', 0.14); tone(659, 0.14, 'triangle', 0.14, 0.12); tone(784, 0.28, 'triangle', 0.16, 0.24); },
+    lose: () => { tone(300, 0.22, 'sawtooth', 0.12); tone(220, 0.3, 'sawtooth', 0.12, 0.16); },
+    reveal: () => { tone(440, 0.1, 'sine', 0.1); tone(660, 0.18, 'sine', 0.12, 0.1); },
+    vote: () => tone(500, 0.09, 'square', 0.08),
+    tick: () => tone(1000, 0.05, 'square', 0.06),
+    elim: () => { tone(180, 0.3, 'sawtooth', 0.14); tone(140, 0.35, 'sawtooth', 0.12, 0.15); }
+  };
+})();
+window.SFX = SFX;
+
 document.addEventListener('DOMContentLoaded', function() {
   const y = new Date().getFullYear();
   document.querySelectorAll('#copyright-year, #copyright-year-home').forEach(function(el) { el.textContent = y; });
@@ -30,16 +82,21 @@ let currentUserData = null;
 let currentRoom = null;
 let currentRoomId = null;
 let currentGameData = null;
+let currentGamePriceAfterDiscount = 0;
 let selectedGameId = null;
 let selectedVote = null;
 let currentRating = 0;
 let currentDetailRating = 0;
 let isEliminated = false;
 let isSpectator = false;
+let isTrueSpectator = false; // فرق عن isSpectator: ده بس لحد فتح الغرفة كمتفرج من غير ما يكون لعب فيها اصلاً
 let ownCharacterRevealed = null;
 let ownIsCapo = false;
 let loginMethod = 'email';
 let roomListeners = [];
+let presenceInterval = null;
+let presenceRefreshInterval = null;
+let lastNotifiedVoteEndsAtMs = null;
 let ownReady = false;
 let lastPlayersArr = [];
 let votedRound = null;
@@ -53,7 +110,7 @@ let clueSpotlightTimerId = null;
 let voteCountdownInterval = null;
 const STORY_REVEAL_MS = 60000;     // قصة القضية تفضل ظاهرة 60 ثانية
 const CLUE_SPOTLIGHT_MS = 60000;   // دليل كل جولة يفضل ظاهر 60 ثانية
-const VOTE_WINDOW_MS = 90000;      // مدة عداد التصويت التقريبية لكل جولة
+const VOTE_WINDOW_MS = 300000;     // مدة عداد التصويت لكل جولة (5 دقايق)
 
 // ===== EXPOSE TO WINDOW =====
 window.switchAuthTab = switchAuthTab;
@@ -103,18 +160,23 @@ initSmoke();
 
 // ===== PWA MANIFEST =====
 function setupManifest() {
+  const appUrl = window.location.origin + window.location.pathname;
   const manifest = {
+    id: appUrl,
     name: "Capo - لعبة التحقيق",
     short_name: "Capo",
     description: "لعبة التحقيق والجريمة",
-    start_url: window.location.href,
+    start_url: appUrl,
+    scope: appUrl,
     display: "standalone",
     background_color: "#050508",
     theme_color: "#0a0a0f",
     orientation: "portrait",
     icons: [
-      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "192x192", type: "image/png" },
-      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "512x512", type: "image/png" }
+      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "512x512", type: "image/png", purpose: "any" },
+      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "192x192", type: "image/png", purpose: "maskable" },
+      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "512x512", type: "image/png", purpose: "maskable" }
     ]
   };
   const blob = new Blob([JSON.stringify(manifest)], {type:'application/json'});
@@ -184,6 +246,11 @@ setTimeout(() => {
         return;
       }
       currentUserData = snap.data();
+      if (!user.emailVerified) {
+        document.getElementById('verify-email-addr').textContent = user.email || '';
+        showScreen('verify-email');
+        return;
+      }
       updateProfileUI();
       showScreen('home');
       document.getElementById('bottom-nav').classList.add('visible');
@@ -231,6 +298,8 @@ function updateProfileUI() {
   document.getElementById('pf-username').textContent = '@' + (currentUserData.username || '');
   document.getElementById('pf-email').textContent = currentUserData.email || (currentUser ? currentUser.email : '');
   document.getElementById('pf-phone').textContent = currentUserData.phone || '-';
+  const walletEl = document.getElementById('wallet-balance-amount');
+  if (walletEl) walletEl.textContent = (currentUserData.walletBalance || 0) + ' جنيه';
 }
 
 // ===== AUTH =====
@@ -288,7 +357,7 @@ async function doRegister() {
     return;
   }
   if (pass.length < 6) {
-    showToast('كلمة المرور يجب ان تكون 6 احرف على الاقل');
+    showToast('كلمة المرور يجب ان تكون 6 احرف على الاقل', 'error');
     return;
   }
 
@@ -301,7 +370,7 @@ async function doRegister() {
       createdAt: firebase.firestore.FieldValue.serverTimestamp(), purchasedGames: []
     });
     document.getElementById('verify-notice').classList.add('show');
-    showToast('تم انشاء الحساب - تحقق من بريدك');
+    showToast('تم انشاء الحساب - تحقق من بريدك', 'success');
   } catch (e) {
     handleAuthError(e);
   }
@@ -331,6 +400,35 @@ async function doLogin() {
     handleAuthError(e);
   }
 }
+
+// بيتاكد لو المستخدم فعّل بريده فعلاً (لازم reload عشان ياخد اخر حالة من Firebase مش الكاش القديم)
+async function checkEmailVerified() {
+  if (!currentUser) return;
+  try {
+    await currentUser.reload();
+    if (currentUser.emailVerified) {
+      showToast('تم تفعيل بريدك بنجاح', 'success');
+      currentUserData = (await db.collection('users').doc(currentUser.uid).get()).data();
+      updateProfileUI();
+      showScreen('home');
+      document.getElementById('bottom-nav').classList.add('visible');
+      loadGames();
+      loadNotifications();
+    } else {
+      showToast('لسه ماتفعلش - تحقق من بريدك وحاول تاني', 'error');
+    }
+  } catch (e) { showToast('حصل خطأ - حاول تاني'); }
+}
+window.checkEmailVerified = checkEmailVerified;
+
+async function resendVerificationEmail() {
+  if (!currentUser) return;
+  try {
+    await currentUser.sendEmailVerification();
+    showToast('تم إعادة إرسال رسالة التفعيل');
+  } catch (e) { showToast('تعذر إرسال الرسالة الآن - حاول بعد شوية'); }
+}
+window.resendVerificationEmail = resendVerificationEmail;
 
 async function doGoogleSignIn() {
   try {
@@ -396,14 +494,14 @@ window.cancelGoogleSignup = cancelGoogleSignup;
 async function doForgotPassword() {
   const email = document.getElementById('login-identifier').value.trim();
   if (!email || loginMethod !== 'email') {
-    showToast('ادخل بريدك الالكتروني أولاً');
+    showToast('ادخل بريدك الالكتروني أولاً', 'error');
     return;
   }
   try {
     await auth.sendPasswordResetEmail(email);
     document.getElementById('forgot-notice').classList.add('show');
   } catch (e) {
-    showToast('البريد غير موجود');
+    showToast('البريد غير موجود', 'error');
   }
 }
 
@@ -428,11 +526,22 @@ function handleAuthError(e) {
     'auth/too-many-requests': 'محاولات كثيرة - انتظر قليلاً',
     'auth/popup-closed-by-user': 'تم الغاء العملية'
   };
-  showToast(msgs[e.code] || 'حدث خطأ - حاول مرة اخرى');
+  showToast(msgs[e.code] || 'حدث خطأ - حاول مرة اخرى', 'error');
 }
 
 // ===== NAVIGATION =====
 let screenHistory = [];
+
+// زرار الرجوع الفعلي في الموبايل (أو زرار رجوع المتصفح) كان بيقفل الموقع كله بدل ما يرجع لشاشة سابقة جوه التطبيق.
+// بنحقن history entry إضافي دايمًا عشان أول ضغطة رجوع توديك لشاشة سابقة جوه الموقع، ولما توصل لأول شاشة (مفيش تاريخ متبقي)
+// بنسيب زرار الرجوع يشتغل بشكل طبيعي (يقفل الموقع) عشان المستخدم يقدر يخرج فعليًا لو حابب.
+try { history.pushState({ screen: 'boot' }, '', location.href); } catch (e) {}
+window.addEventListener('popstate', function() {
+  if (screenHistory.length > 0) {
+    goBack();
+    try { history.pushState({ screen: 'sync' }, '', location.href); } catch (e) {}
+  }
+});
 
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -441,6 +550,7 @@ function showScreen(id) {
 }
 
 function navigateTo(id) {
+  SFX.click();
   const active = document.querySelector('.screen.active');
   if (active) screenHistory.push(active.id.replace('screen-', ''));
   showScreen(id);
@@ -501,8 +611,10 @@ function buildGameCard(g) {
   const ratingCount = g.ratingCount || 0;
   const avg = ratingCount ? (g.ratingSum || 0) / ratingCount : 0;
   const mascotHtml = '<img class="game-card-mascot" src="' + (g.mascotUrl || DEFAULT_MASCOT_URL) + '" alt="" draggable="false" oncontextmenu="return false">';
-  const gJson = JSON.stringify(g).replace(/'/g, "&#39;");
-  return '<div class="game-card" onclick="flipGameCard(this)">'
+  // بيانات اللعبة بتتخزن في data-game بشكل آمن (attributeEscape بيحول أي " أو ' أو & لكود HTML)
+  // بدل ما نحقنها كـ JSON خام جوه onclick="" اللي كان بيكسر أي وقت اسم اللعبة أو أي حقل فيه علامة تنصيص
+  const gameDataAttr = attributeEscape(JSON.stringify(g));
+  return '<div class="game-card" data-game="' + gameDataAttr + '" onclick="flipGameCard(this)">'
     + '<div class="game-card-inner">'
     + '<div class="game-card-face game-card-front">'
     + imgContent + badge
@@ -522,10 +634,34 @@ function buildGameCard(g) {
     + '<div class="game-card-back-name">' + escapeHtml(g.name || 'لعبة') + '</div>'
     + '<div class="game-card-back-stars" data-gid="' + g.id + '">' + buildQuickRateStars(g.id, avg) + '<span class="gcb-count">(' + ratingCount + ')</span></div>'
     + '<div class="game-card-back-plays">اتلعبت ' + (g.playsCount || 0) + ' مرة</div>'
-    + '<button class="game-card-back-btn" onclick="event.stopPropagation(); showGameDetail(' + gJson + ')">عرض التفاصيل</button>'
+    + '<button class="game-card-back-btn" onclick="event.stopPropagation(); showGameDetailFromCard(this)">عرض التفاصيل</button>'
     + '</div>'
     + '</div></div>';
 }
+
+// تهريب آمن للنص عشان يتحط جوه HTML attribute من غير ما يكسره (مختلف عن escapeHtml العادي لأنه بيغطي علامات التنصيص الاتنين)
+function attributeEscape(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// بيقرأ بيانات اللعبة من data-game على الكارت (مش من onclick مباشرة) عشان يفضل شغال مهما كان اسم/وصف اللعبة فيه علامات تنصيص
+function showGameDetailFromCard(btnEl) {
+  const card = btnEl.closest('.game-card');
+  if (!card || !card.dataset.game) return;
+  try {
+    const g = JSON.parse(card.dataset.game);
+    showGameDetail(g);
+  } catch (e) {
+    console.error('تعذر قراءة بيانات اللعبة', e);
+    showToast('حصل خطأ - جرب تاني');
+  }
+}
+window.showGameDetailFromCard = showGameDetailFromCard;
 
 // نجوم تفاعلية على ضهر الكارت مباشرة - عشان التقييم يبقى واضح من غير ما تدخل تفاصيل اللعبة
 function buildQuickRateStars(gameId, avg) {
@@ -581,6 +717,7 @@ function showGameDetail(g) {
   const diff = DIFFICULTY_MAP[g.difficulty] || DIFFICULTY_MAP.medium;
   document.getElementById('detail-difficulty').textContent = diff[0];
   const isPaid = g.price && parseFloat(g.price) > 0;
+  currentGamePriceAfterDiscount = isPaid ? parseFloat(g.price) : 0;
   document.getElementById('detail-price').textContent = isPaid ? g.price + ' جنيه' : 'مجاني';
   document.getElementById('coupon-section').style.display = isPaid ? 'block' : 'none';
   document.getElementById('paypal-button-container').innerHTML = '';
@@ -590,20 +727,9 @@ function showGameDetail(g) {
   document.getElementById('detail-rating-summary').innerHTML = buildStaticStars(avg)
     + '<span class="drs-count">' + (ratingCount ? (avg.toFixed(1) + ' (' + ratingCount + ' تقييم) - اتلعبت ' + (g.playsCount || 0) + ' مرة') : 'لسه معملهاش حد تقييم') + '</span>';
 
+  // شخصيات القضية سر للاعب لحد ما يدخل اللعبة فعلاً - مبتتعرضش في شاشة التفاصيل قبل الدخول
   const charsSection = document.getElementById('detail-characters-section');
-  const characters = g.characters || [];
-  if (characters.length) {
-    document.getElementById('detail-characters-list').innerHTML = characters.map(function(c) {
-      return '<div class="char-preview-card">'
-        + '<div class="char-preview-avatar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0116 0v1"/></svg></div>'
-        + '<div><div class="char-preview-name">' + escapeHtml(c.name || 'شخصية') + '</div>'
-        + (c.bio ? '<div class="char-preview-bio">' + escapeHtml(c.bio) + '</div>' : '')
-        + '</div></div>';
-    }).join('');
-    charsSection.style.display = 'block';
-  } else {
-    charsSection.style.display = 'none';
-  }
+  charsSection.style.display = 'none';
 
   currentDetailRating = 0;
   document.querySelectorAll('#detail-stars-row .star-btn').forEach(b => b.classList.remove('active'));
@@ -611,15 +737,62 @@ function showGameDetail(g) {
 
   const purchased = currentUserData && (currentUserData.purchasedGames || []).includes(g.id);
   const actionBtn = document.getElementById('detail-action-btn');
+  const walletPayBtn = document.getElementById('detail-wallet-pay-btn');
   if (!isPaid || purchased) {
     actionBtn.textContent = 'انضم لغرفة';
     actionBtn.onclick = function() { navigateTo('join'); };
+    walletPayBtn.style.display = 'none';
   } else {
     actionBtn.textContent = 'اشتر الان - ' + g.price + ' جنيه';
     actionBtn.onclick = function() { initPayPal(g); };
+    walletPayBtn.style.display = 'flex';
+    updateWalletPayButton();
   }
   navigateTo('game-detail');
 }
+
+// بيحدّث نص وحالة زرار "ادفع من المحفظة" حسب السعر بعد الخصم (لو اتطبق كوبون) ورصيد المحفظة الحالي
+function updateWalletPayButton() {
+  const walletPayBtn = document.getElementById('detail-wallet-pay-btn');
+  if (!walletPayBtn || walletPayBtn.style.display === 'none') return;
+  const balance = (currentUserData && currentUserData.walletBalance) || 0;
+  const price = currentGamePriceAfterDiscount;
+  walletPayBtn.textContent = 'ادفع من المحفظة - ' + price.toFixed(2) + ' جنيه';
+  walletPayBtn.disabled = balance < price;
+  walletPayBtn.title = balance < price ? 'رصيدك في المحفظة مش كافي - اشحن الأول من صفحة حسابي' : '';
+}
+window.updateWalletPayButton = updateWalletPayButton;
+
+// دفع سعر اللعبة (بعد أي خصم كوبون) من رصيد المحفظة مباشرة
+async function payGameWithWallet() {
+  if (!currentUser || !currentUserData || !currentGameData) return;
+  const g = currentGameData;
+  const price = currentGamePriceAfterDiscount;
+  const balance = currentUserData.walletBalance || 0;
+  if (balance < price) { showToast('رصيدك في المحفظة مش كافي - اشحن الأول من صفحة حسابي', 'error'); return; }
+  const walletPayBtn = document.getElementById('detail-wallet-pay-btn');
+  walletPayBtn.disabled = true;
+  try {
+    await db.collection('users').doc(currentUser.uid).update({
+      walletBalance: firebase.firestore.FieldValue.increment(-price),
+      purchasedGames: firebase.firestore.FieldValue.arrayUnion(g.id)
+    });
+    currentUserData.walletBalance = balance - price;
+    currentUserData.purchasedGames = (currentUserData.purchasedGames || []).concat([g.id]);
+    const walletEl = document.getElementById('wallet-balance-amount');
+    if (walletEl) walletEl.textContent = currentUserData.walletBalance + ' جنيه';
+    showToast('تم الدفع من المحفظة - اللعبة بقت ملكك دايمًا', 'success');
+    walletPayBtn.style.display = 'none';
+    document.getElementById('coupon-section').style.display = 'none';
+    const actionBtn = document.getElementById('detail-action-btn');
+    actionBtn.textContent = 'انضم لغرفة';
+    actionBtn.onclick = function() { navigateTo('join'); };
+  } catch (e) {
+    walletPayBtn.disabled = false;
+    showToast('تعذر إتمام الدفع من المحفظة', 'error');
+  }
+}
+window.payGameWithWallet = payGameWithWallet;
 
 function handlePlayNowClick() {
   if (!currentGameData) return;
@@ -707,15 +880,16 @@ function initPayPal(g) {
 }
 function renderPayPal(g) {
   document.getElementById('paypal-button-container').innerHTML = '';
+  const chargeAmount = currentGamePriceAfterDiscount || parseFloat(g.price || '1');
   window.paypal.Buttons({
     createOrder: function(data, actions) {
-      return actions.order.create({ purchase_units: [{ amount: { value: String(g.price || '1') } }] });
+      return actions.order.create({ purchase_units: [{ amount: { value: String(chargeAmount) } }] });
     },
     onApprove: async function(data, actions) {
       await actions.order.capture();
       await db.collection('users').doc(currentUser.uid).update({ purchasedGames: firebase.firestore.FieldValue.arrayUnion(g.id) });
       currentUserData.purchasedGames = (currentUserData.purchasedGames || []).concat([g.id]);
-      showToast('تم الشراء بنجاح');
+      showToast('تم الشراء بنجاح', 'success');
       const actionBtn = document.getElementById('detail-action-btn');
       actionBtn.textContent = 'انضم لغرفة';
       actionBtn.onclick = function() { navigateTo('join'); };
@@ -724,29 +898,81 @@ function renderPayPal(g) {
   }).render('#paypal-button-container');
 }
 
+// ===== WALLET =====
+function toggleWalletTopup() {
+  const section = document.getElementById('wallet-topup-section');
+  section.style.display = section.style.display === 'none' ? 'block' : 'none';
+}
+window.toggleWalletTopup = toggleWalletTopup;
+
+function initWalletTopup() {
+  const amount = parseFloat(document.getElementById('wallet-topup-amount').value);
+  if (!amount || amount <= 0) { showToast('اكتب مبلغ صحيح', 'error'); return; }
+  if (window.paypal) { renderWalletPayPal(amount); return; }
+  const script = document.createElement('script');
+  script.src = 'https://www.paypal.com/sdk/js?client-id=AW_M1acPABnrPp2AJklYALUDZ1OUA2NS6CPGp3D3ZB9fVIfmfD87le9WZmHF3fOCqINDO3RAtQGWLteZ&currency=USD';
+  script.onload = function() { renderWalletPayPal(amount); };
+  document.head.appendChild(script);
+}
+window.initWalletTopup = initWalletTopup;
+
+function renderWalletPayPal(amount) {
+  const container = document.getElementById('wallet-paypal-container');
+  container.innerHTML = '';
+  window.paypal.Buttons({
+    createOrder: function(data, actions) {
+      return actions.order.create({ purchase_units: [{ amount: { value: String(amount) } }] });
+    },
+    onApprove: async function(data, actions) {
+      await actions.order.capture();
+      try {
+        await db.collection('users').doc(currentUser.uid).update({
+          walletBalance: firebase.firestore.FieldValue.increment(amount)
+        });
+        currentUserData.walletBalance = (currentUserData.walletBalance || 0) + amount;
+        document.getElementById('wallet-balance-amount').textContent = currentUserData.walletBalance + ' جنيه';
+        showToast('تم شحن ' + amount + ' جنيه في محفظتك', 'success');
+        document.getElementById('wallet-topup-section').style.display = 'none';
+        document.getElementById('wallet-topup-amount').value = '';
+      } catch (e) { showToast('حصل خطأ في تحديث الرصيد - كلم الدعم', 'error'); }
+    },
+    onError: function() { showToast('فشل الدفع - حاول مرة اخرى'); }
+  }).render('#wallet-paypal-container');
+}
+
 async function applyCoupon() {
   const code = document.getElementById('coupon-input').value.trim().toUpperCase();
   if (!code) return;
   try {
     const snap = await db.collection('coupons').where('code', '==', code).where('active', '==', true).get();
-    if (snap.empty) { showToast('كود الخصم غير صحيح'); return; }
+    if (snap.empty) { showToast('كود الخصم غير صحيح', 'error'); return; }
     const coupon = snap.docs[0].data();
-    if (coupon.gameId && coupon.gameId !== selectedGameId) { showToast('هذا الكود غير صالح لهذه اللعبة'); return; }
+    if (coupon.gameId && coupon.gameId !== selectedGameId) { showToast('هذا الكود غير صالح لهذه اللعبة', 'error'); return; }
     const discount = coupon.discount || 0;
     if (discount >= 100) {
       await db.collection('users').doc(currentUser.uid).update({ purchasedGames: firebase.firestore.FieldValue.arrayUnion(selectedGameId) });
       currentUserData.purchasedGames = (currentUserData.purchasedGames || []).concat([selectedGameId]);
-      showToast('تم تفعيل الكود - اللعبة مجانية الان');
+      showToast('تم تفعيل الكود - اللعبة مجانية الان', 'success');
       document.getElementById('detail-action-btn').textContent = 'انضم لغرفة';
     } else {
       const newPrice = (parseFloat(currentGameData.price || 0) * (1 - discount/100)).toFixed(2);
       document.getElementById('detail-price').textContent = newPrice + ' جنيه (بعد الخصم)';
-      showToast('تم تطبيق خصم ' + discount + '%');
+      currentGamePriceAfterDiscount = parseFloat(newPrice);
+      const actionBtn = document.getElementById('detail-action-btn');
+      if (actionBtn) actionBtn.textContent = 'اشتر الان - ' + newPrice + ' جنيه';
+      updateWalletPayButton();
+      showToast('تم تطبيق خصم ' + discount + '%', 'success');
     }
-  } catch (e) { showToast('خطأ في تطبيق الكود'); }
+  } catch (e) { showToast('خطأ في تطبيق الكود', 'error'); }
 }
 
 // ===== ROOM =====
+async function hashText(text) {
+  const enc = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
@@ -782,6 +1008,17 @@ async function joinRoomByCode(code) {
       showToast('الغرفة مقفولة حالياً ولا تقبل لاعبين جدد');
       return;
     }
+    // غرفة خاصة بكلمة سر - نطلبها من أي لاعب جديد (مش من الأعضاء الحاليين اللي بيرجعوا للغرفة)
+    if (currentRoom.isPublic === false && currentRoom.passwordHash && !existingSelf.exists) {
+      const pass = prompt('دي غرفة خاصة - اكتب كلمة السر:');
+      if (pass === null) { currentRoomId = null; currentRoom = null; return; }
+      const hash = await hashText(pass.trim());
+      if (hash !== currentRoom.passwordHash) {
+        currentRoomId = null; currentRoom = null;
+        showToast('كلمة السر غلط', 'error');
+        return;
+      }
+    }
     // متدخلش عدد لاعبين اكتر من العدد المحدد للغرفة
     if (currentRoom.maxPlayers && !existingSelf.exists) {
       const countSnap = await db.collection('rooms').doc(currentRoomId).collection('players').get();
@@ -813,6 +1050,7 @@ async function joinRoomByCode(code) {
 function enterRoom() {
   isEliminated = false;
   isSpectator = false;
+  isTrueSpectator = false;
   selectedVote = null;
   ownCharacterRevealed = null;
   resetRoomFeatureState();
@@ -833,6 +1071,7 @@ function resetRoomFeatureState() {
   ownIsCapo = false;
   lastPlayersArr = [];
   votedRound = null;
+  lastNotifiedVoteEndsAtMs = null;
   clearInterval(caseStoryTimerId); caseStoryTimerId = null;
   clearInterval(clueSpotlightTimerId); clueSpotlightTimerId = null;
   clearInterval(voteCountdownInterval); voteCountdownInterval = null;
@@ -862,16 +1101,58 @@ window.openCreateRoomScreen = openCreateRoomScreen;
 function renderCreateRoomGamesList() {
   const list = document.getElementById('create-room-games-list');
   const played = (currentUserData && currentUserData.playedGameIds) || [];
-  list.innerHTML = createRoomGamesCache.map(g =>
-    '<label style="display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border-subtle,#222230);border-radius:10px;margin-bottom:8px;">' +
-      '<input type="checkbox" class="create-room-game-cb" value="' + g.id + '" onchange="updateMaxPlayersOptions()">' +
+  const purchased = (currentUserData && currentUserData.purchasedGames) || [];
+  const balance = (currentUserData && currentUserData.walletBalance) || 0;
+  list.innerHTML = createRoomGamesCache.map(g => {
+    const isPaid = g.price && parseFloat(g.price) > 0;
+    const owned = !isPaid || purchased.indexOf(g.id) !== -1;
+    const canAfford = owned || balance >= parseFloat(g.price);
+    const lockNote = (!owned && !canAfford)
+      ? '<div class="wallet-locked-note">لعبة مدفوعة (' + g.price + ' جنيه) - رصيدك في المحفظة مش كافي، اشحن الأول من صفحة حسابي</div>'
+      : (!owned && canAfford ? '<div class="wallet-locked-note" style="color:var(--accent-gold);">مدفوعة (' + g.price + ' جنيه) - هيتخصم من محفظتك أول ما تختارها</div>' : '');
+    return '<label style="display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid var(--border-subtle,#222230);border-radius:10px;margin-bottom:8px;' + (!owned && !canAfford ? 'opacity:0.5;' : '') + '">' +
+      '<input type="checkbox" class="create-room-game-cb" value="' + g.id + '" data-owned="' + owned + '" data-canafford="' + canAfford + '" data-price="' + (g.price || 0) + '" ' + (!owned && !canAfford ? 'disabled' : '') + ' onchange="handleCreateRoomGameCheck(this, \'' + g.id + '\')">' +
       '<span style="flex:1;">' + escapeHtml(g.name || 'لعبة') +
         (played.indexOf(g.id) !== -1 ? '<span style="margin-right:8px;font-size:0.7rem;color:var(--text-muted);">لعبتها قبل كده</span>' : '') +
+        lockNote +
       '</span>' +
-    '</label>'
-  ).join('') || '<div style="color:var(--text-muted);font-size:0.8rem;">لا توجد العاب متاحة</div>';
+    '</label>';
+  }).join('') || '<div style="color:var(--text-muted);font-size:0.8rem;">لا توجد العاب متاحة</div>';
   updateMaxPlayersOptions();
 }
+
+// لما تحاول تختار لعبة مدفوعة لسه مشتريتهاش، بنخصم قيمتها من المحفظة فورًا ونضيفها لألعابك المشتراة (شراء مرة واحدة، تلعب بيها على طول بعد كده)
+async function handleCreateRoomGameCheck(checkbox, gameId) {
+  if (!checkbox.checked) { updateMaxPlayersOptions(); return; }
+  const owned = checkbox.dataset.owned === 'true';
+  if (owned) { updateMaxPlayersOptions(); return; }
+  const price = parseFloat(checkbox.dataset.price) || 0;
+  const balance = (currentUserData && currentUserData.walletBalance) || 0;
+  if (balance < price) {
+    checkbox.checked = false;
+    showToast('رصيدك في المحفظة مش كافي - اشحن المحفظة الأول من صفحة حسابي', 'error');
+    return;
+  }
+  checkbox.disabled = true;
+  try {
+    await db.collection('users').doc(currentUser.uid).update({
+      walletBalance: firebase.firestore.FieldValue.increment(-price),
+      purchasedGames: firebase.firestore.FieldValue.arrayUnion(gameId)
+    });
+    currentUserData.walletBalance = balance - price;
+    currentUserData.purchasedGames = (currentUserData.purchasedGames || []).concat([gameId]);
+    const walletEl = document.getElementById('wallet-balance-amount');
+    if (walletEl) walletEl.textContent = currentUserData.walletBalance + ' جنيه';
+    showToast('تم خصم ' + price + ' جنيه من محفظتك - اللعبة بقت ملكك دايمًا', 'success');
+    checkbox.dataset.owned = 'true';
+  } catch (e) {
+    checkbox.checked = false;
+    showToast('تعذر إتمام الشراء من المحفظة', 'error');
+  }
+  checkbox.disabled = false;
+  updateMaxPlayersOptions();
+}
+window.handleCreateRoomGameCheck = handleCreateRoomGameCheck;
 
 // يبني قائمة "عدد اللاعبين" حسب اول لعبة متختارة (عشان نلزم الغرفة بعدد محدد ومتدخلش اكتر او اقل منه)
 function updateMaxPlayersOptions() {
@@ -911,9 +1192,14 @@ async function createRoomByPlayer() {
   const firstGame = createRoomGamesCache.find(g => g.id === selectedIds[0]);
   const maxPlayersSelect = document.getElementById('create-room-maxplayers');
   const maxPlayers = maxPlayersSelect && maxPlayersSelect.value ? parseInt(maxPlayersSelect.value, 10) : null;
+  const isPrivateCb = document.getElementById('create-room-private-cb');
+  const isPrivate = !!(isPrivateCb && isPrivateCb.checked);
+  const passwordInput = document.getElementById('create-room-password');
+  const password = passwordInput ? passwordInput.value.trim() : '';
+  if (isPrivate && !password) { showToast('اكتب كلمة سر للغرفة الخاصة', 'error'); return; }
   try {
     const roomRef = db.collection('rooms').doc();
-    await roomRef.set({
+    const roomData = {
       name: name,
       code: generatePlayerRoomCode(),
       ownerUid: currentUser.uid,
@@ -929,11 +1215,13 @@ async function createRoomByPlayer() {
       eliminatedPlayers: [],
       capoEliminated: false,
       capoWon: false,
-      isPublic: true,
+      isPublic: !isPrivate,
       locked: false,
       maxPlayers: maxPlayers,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    };
+    if (isPrivate) roomData.passwordHash = await hashText(password);
+    await roomRef.set(roomData);
     currentRoomId = roomRef.id;
     const roomSnap = await roomRef.get();
     currentRoom = roomSnap.data();
@@ -983,6 +1271,7 @@ async function enterSpectateRoom(roomId) {
     currentRoomId = roomId;
     currentRoom = doc.data();
     isSpectator = true;
+    isTrueSpectator = true;
     isEliminated = false;
     ownCharacterRevealed = null;
     resetRoomFeatureState();
@@ -1010,7 +1299,7 @@ async function startGameInRoom() {
 
     const playersSnap = await db.collection('rooms').doc(currentRoomId).collection('players').get();
     const playerDocs = playersSnap.docs;
-    if (playerDocs.length < 2) { showToast('لازم على الاقل لاعبين اتنين'); return; }
+    if (playerDocs.length < 3) { showToast('لازم على الاقل 3 لاعبين عشان التصويت يبقى له معنى (لعبة بين اتنين بس بتتعادل كل مرة)', 'error'); return; }
     if (currentRoom.maxPlayers && playerDocs.length !== currentRoom.maxPlayers) {
       showToast('لازم الغرفة تكتمل بالظبط بـ ' + currentRoom.maxPlayers + ' لاعبين عشان تبدأ (حالياً ' + playerDocs.length + ')');
       return;
@@ -1026,7 +1315,8 @@ async function startGameInRoom() {
     const batch = db.batch();
     playerDocs.forEach((pDoc, idx) => {
       const ch = shuffled[idx];
-      batch.update(pDoc.ref, {
+      // بيانات الشخصية السرية (وهل هو كابو) بتتخزن في مستند خاص تحت كل لاعب - مش في مستند اللاعب العام اللي كل حد في الغرفة بيقدر يقراه
+      batch.set(pDoc.ref.collection('private').doc('char'), {
         characterId: ch.id || ('c' + idx),
         characterName: ch.name || '',
         characterBio: ch.bio || '',
@@ -1079,31 +1369,79 @@ async function endRoundInRoom() {
       if (tally[uid] > maxCount) { maxCount = tally[uid]; topUids = [uid]; }
       else if (tally[uid] === maxCount) { topUids.push(uid); }
     });
-    const eliminatedUid = topUids[Math.floor(Math.random() * topUids.length)];
+
+    const roomRef = db.collection('rooms').doc(currentRoomId);
+
+    // تعادل في الأصوات - محدش يتصيد، وبنفتح دقيقة تصويت تانية على نفس الجولة
+    if (topUids.length > 1) {
+      const aliasSnap = await db.collection('rooms').doc(currentRoomId).collection('players').get();
+      const aliasMapTie = {};
+      aliasSnap.forEach(d => { const pd = d.data(); aliasMapTie[d.id] = pd.alias || pd.name || 'لاعب'; });
+      const tieBatch = db.batch();
+      votesSnap.forEach(d => tieBatch.delete(d.ref));
+      tieBatch.set(roomRef.collection('voteHistory').doc('r' + (currentRoom.currentRound || 1) + '_tie' + Date.now()), {
+        round: currentRoom.currentRound || 1,
+        tie: true,
+        votes: votesSnap.docs.map(d => {
+          const v = d.data();
+          return { voterAlias: v.voterAlias || aliasMapTie[v.voterUid] || '', targetAlias: aliasMapTie[v.targetUid] || '' };
+        })
+      });
+      tieBatch.update(roomRef, {
+        votingOpen: true,
+        voteEndsAt: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 60000))
+      });
+      await tieBatch.commit();
+      showToast('تعادل في التصويت - دقيقة تصويت تانية عشان نحسم', 'info');
+      return;
+    }
+    const eliminatedUid = topUids[0];
 
     const playersSnap = await db.collection('rooms').doc(currentRoomId).collection('players').get();
-    const allPlayers = playersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    // isCapo بقى مخزن في مستند خاص تحت كل لاعب - لازم نجيبه عشان نحسب نتيجة اللعبة (صاحب الغرفة بس اللي بيعمل الحساب ده)
+    const allPlayers = [];
+    for (const d of playersSnap.docs) {
+      const privSnap = await d.ref.collection('private').doc('char').get();
+      const priv = privSnap.exists ? privSnap.data() : {};
+      allPlayers.push({ uid: d.id, ...d.data(), ...priv });
+    }
     const newEliminated = (currentRoom.eliminatedPlayers || []).slice();
     if (newEliminated.indexOf(eliminatedUid) === -1) newEliminated.push(eliminatedUid);
     const remainingCapos = allPlayers.filter(p => p.isCapo && newEliminated.indexOf(p.uid) === -1);
     const remainingInnocents = allPlayers.filter(p => !p.isCapo && newEliminated.indexOf(p.uid) === -1);
 
+    // نسجّل مين صوّت لمين في الجولة دي عشان تقرير نهاية اللعبة
+    const aliasMap = {};
+    allPlayers.forEach(p => { aliasMap[p.uid] = p.alias || p.name || 'لاعب'; });
+    const eliminatedAlias = aliasMap[eliminatedUid] || '';
+    const voteRecords = votesSnap.docs.map(d => {
+      const v = d.data();
+      return { voterAlias: v.voterAlias || aliasMap[v.voterUid] || '', targetAlias: aliasMap[v.targetUid] || '' };
+    });
+
     const batch = db.batch();
     votesSnap.forEach(d => batch.delete(d.ref));
-    const roomRef = db.collection('rooms').doc(currentRoomId);
+    batch.set(roomRef.collection('voteHistory').doc('r' + (currentRoom.currentRound || 1)), {
+      round: currentRoom.currentRound || 1,
+      eliminatedAlias: eliminatedAlias,
+      votes: voteRecords
+    });
 
     if (remainingCapos.length === 0) {
       // كل الكابوهات اتصيدوا - الأبرياء كسبوا
       batch.update(roomRef, { eliminatedPlayers: newEliminated, capoEliminated: true, votingOpen: false, roundDone: true });
       const winners = allPlayers.filter(p => !p.isCapo && newEliminated.indexOf(p.uid) === -1);
       recordGameWinners(batch, winners);
-    } else if (remainingInnocents.length === 0) {
-      // كل الأبرياء خرجوا وفضل الكابو/الكابوهات - يكسبوا فوراً من غير ما ننتظر اخر جولة
+      batch.update(roomRef, { finalRoles: buildFinalRolesReveal(allPlayers) });
+    } else if (remainingCapos.length >= remainingInnocents.length) {
+      // عدد الكابوهات بقى مساوي أو أكتر من الأبرياء المتبقيين - الكابوهات يفوزوا فورًا (لو ٢ كابوز فضلوا وبريء واحد مثلاً)
       batch.update(roomRef, { eliminatedPlayers: newEliminated, capoWon: true, votingOpen: false, roundDone: true });
       recordGameWinners(batch, remainingCapos);
+      batch.update(roomRef, { finalRoles: buildFinalRolesReveal(allPlayers) });
     } else if ((currentRoom.currentRound || 1) >= (currentRoom.totalRounds || 5)) {
       batch.update(roomRef, { eliminatedPlayers: newEliminated, capoWon: true, votingOpen: false, roundDone: true });
       recordGameWinners(batch, remainingCapos);
+      batch.update(roomRef, { finalRoles: buildFinalRolesReveal(allPlayers) });
     } else {
       batch.update(roomRef, {
         eliminatedPlayers: newEliminated,
@@ -1123,6 +1461,18 @@ async function endRoundInRoom() {
 window.endRoundInRoom = endRoundInRoom;
 
 // يسجّل كل لاعب فايز في مجموعة wins عشان ميزة "أبرز اللاعبين" - بيتنفذ مرة واحدة بس (صاحب الغرفة هو اللي بينده الدالة دي)
+// بيبني قايمة كشف الأدوار اللي بتتعرض في نهاية اللعبة بس (مين كان كابو ومين شخصيته ايه)
+function buildFinalRolesReveal(allPlayers) {
+  return allPlayers.map(function(p) {
+    return {
+      alias: p.alias || p.name || 'لاعب',
+      name: p.name || '',
+      characterName: p.characterName || '',
+      isCapo: !!p.isCapo
+    };
+  });
+}
+
 function recordGameWinners(batch, winners) {
   const gameId = currentRoom.currentGameId || '';
   const gameName = currentRoom.gameName || '';
@@ -1152,12 +1502,7 @@ async function playNextGameInRoom() {
     const playersSnap = await db.collection('rooms').doc(currentRoomId).collection('players').get();
     const batch = db.batch();
     playersSnap.forEach(d => {
-      batch.update(d.ref, {
-        characterId: firebase.firestore.FieldValue.delete(),
-        characterName: firebase.firestore.FieldValue.delete(),
-        characterBio: firebase.firestore.FieldValue.delete(),
-        isCapo: firebase.firestore.FieldValue.delete()
-      });
+      batch.delete(d.ref.collection('private').doc('char'));
     });
     batch.update(db.collection('rooms').doc(currentRoomId), {
       currentGameIndex: nextIndex,
@@ -1202,8 +1547,40 @@ window.closeCharacterReveal = function() {
   if (overlay) overlay.classList.remove('show');
 };
 
+// ===== LOCAL NOTIFICATIONS (بداية التصويت / ظهور دليل جديد) =====
+// إشعار محلي بس لما التاب يبقى في الخلفية (لو التطبيق مفتوح قدام المستخدم أصلاً هو شايف التغيير على الشاشة زي ما هو)
+function notifyLocal(title, body) {
+  try {
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'granted') return;
+    if (!document.hidden) return;
+    const n = new Notification(title, { body: body, icon: 'https://i.ibb.co/cX7FVw1b/icon.png', tag: 'capo-room' });
+    setTimeout(function() { try { n.close(); } catch (e) {} }, 8000);
+  } catch (e) { /* بعض المتصفحات بترفض الاشعارات من غير سياق تفاعل مباشر - نتجاهل بهدوء */ }
+}
+function requestNotifPermissionOnce() {
+  try {
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission === 'default') Notification.requestPermission().catch(function() {});
+  } catch (e) {}
+}
+
 function setupRoomListeners() {
   clearRoomListeners();
+
+  // presence - نحدّث وقت آخر نشاط كل 20 ثانية عشان باقي اللاعبين يشوفوا مين متصل دلوقتي فعلاً
+  if (!isTrueSpectator && currentUser) {
+    requestNotifPermissionOnce();
+    const updatePresence = function() {
+      db.collection('rooms').doc(currentRoomId).collection('players').doc(currentUser.uid)
+        .update({ lastActive: firebase.firestore.FieldValue.serverTimestamp() }).catch(function() {});
+    };
+    updatePresence();
+    presenceInterval = setInterval(updatePresence, 20000);
+    presenceRefreshInterval = setInterval(function() {
+      if (lastPlayersArr.length) renderPlayers(lastPlayersArr);
+    }, 15000);
+  }
 
   // room status
   const unsub1 = db.collection('rooms').doc(currentRoomId).onSnapshot((snap) => {
@@ -1247,31 +1624,41 @@ function setupRoomListeners() {
   });
   roomListeners.push(unsub4);
 
-  // own character reveal + own ready state + kick detection (private, only this player sees it)
+  // own ready state + kick detection (public doc - كل لاعبي الغرفة يقدروا يقروه)
   const unsub5 = db.collection('rooms').doc(currentRoomId).collection('players').doc(currentUser.uid).onSnapshot((snap) => {
     if (!snap.exists) {
       // الدوكيومنت بتاعنا اتمسح وإحنا لسه في الغرفة (مش إحنا اللي عملنا exitRoom) = صاحب الغرفة طردنا
       if (currentRoomId && !isSpectator) {
-        showToast('تم إخراجك من الغرفة');
+        showToast('تم إخراجك من الغرفة', 'error');
         exitRoom();
       }
       return;
     }
     const p = snap.data();
     ownReady = !!p.ready;
-    ownIsCapo = !!p.isCapo;
     updateReadyButtonUI();
+  });
+  roomListeners.push(unsub5);
+
+  // شخصيتنا السرية وهل احنا كابو - مستند خاص بينا بس (private/char) محدش تاني يقدر يقراه غيرنا
+  const unsub6 = db.collection('rooms').doc(currentRoomId).collection('players').doc(currentUser.uid).collection('private').doc('char').onSnapshot((snap) => {
+    const p = snap.exists ? snap.data() : {};
+    ownIsCapo = !!p.isCapo;
     if (p.characterId && p.characterId !== ownCharacterRevealed) {
       ownCharacterRevealed = p.characterId;
       showCharacterReveal(p);
+    } else if (!p.characterId) {
+      ownCharacterRevealed = null;
     }
   });
-  roomListeners.push(unsub5);
+  roomListeners.push(unsub6);
 }
 
 function clearRoomListeners() {
   roomListeners.forEach(u => u());
   roomListeners = [];
+  if (presenceInterval) { clearInterval(presenceInterval); presenceInterval = null; }
+  if (presenceRefreshInterval) { clearInterval(presenceRefreshInterval); presenceRefreshInterval = null; }
 }
 
 function updateRoomUI() {
@@ -1297,6 +1684,15 @@ function updateRoomUI() {
     if (startBtn) startBtn.style.display = (currentRoom.ownerUid === currentUser.uid) ? 'block' : 'none';
     updateReadyButtonUI();
     updateRoomLockUI();
+    // لعبة جديدة هتبدأ في نفس الغرفة (اللعبة السابقة خلصت) - نفضّي حالة "خرجت/بتتفرج" القديمة
+    // عن أي لاعب حقيقي (مش عن المتفرج الحقيقي اللي مكنش لاعب اصلاً) عشان محدش يفضل عالق برا اللعبة الجديدة
+    if (!isTrueSpectator && round === 0 && (isEliminated || isSpectator)) {
+      isEliminated = false;
+      isSpectator = false;
+      document.getElementById('eliminated-overlay').classList.remove('show');
+      document.getElementById('spectator-bar').classList.remove('show');
+      document.getElementById('chat-input').disabled = false;
+    }
   } else if (status === 'active') {
     document.getElementById('waiting-screen').style.display = 'none';
     document.getElementById('active-game-area').style.display = 'flex';
@@ -1308,6 +1704,11 @@ function updateRoomUI() {
     if (currentRoom.votingOpen) {
       document.getElementById('vote-badge').classList.add('show');
       document.getElementById('vote-round-info').textContent = 'صوت على من تعتقد انه كابو - جولة ' + round;
+      const voteEndsMs = currentRoom.voteEndsAt ? currentRoom.voteEndsAt.toMillis() : null;
+      if (voteEndsMs && lastNotifiedVoteEndsAtMs !== voteEndsMs) {
+        lastNotifiedVoteEndsAtMs = voteEndsMs;
+        notifyLocal('بدأ التصويت', 'جولة ' + round + ' - صوّت على مين تعتقد انه كابو قبل ما الوقت يخلص');
+      }
       startVoteCountdown(currentRoom.voteEndsAt);
     } else {
       document.getElementById('vote-badge').classList.remove('show');
@@ -1331,8 +1732,17 @@ function updateRoomUI() {
     }
     document.getElementById('spectator-bar').classList.add('show');
     document.getElementById('chat-input').disabled = true;
-    document.getElementById('btn-submit-vote').disabled = true;
+    // اللاعب البريء اللي خرج لسه يقدر "يصوت كشبح" في الجولات الجاية - الكابو المكشوف بس هو اللي يتقفل عليه التصويت تمامًا
+    if (ownIsCapo) {
+      document.getElementById('btn-submit-vote').disabled = true;
+    }
   }
+
+  // اخفاء كود الغرفة وزرار المشاركة عن أي حد في وضع المشاهدة (سواء متفرج حقيقي او لاعب خرج)
+  const roomCodeBox = document.getElementById('room-code-box');
+  if (roomCodeBox) roomCodeBox.style.display = isSpectator ? 'none' : '';
+  const shareBtnWaiting = document.getElementById('btn-share-room-waiting');
+  if (shareBtnWaiting) shareBtnWaiting.style.display = isSpectator ? 'none' : '';
 
   // check if capo was eliminated (game over early)
   if (currentRoom.capoEliminated) {
@@ -1412,6 +1822,7 @@ function showClueSpotlight(round, endsAtMs) {
   document.getElementById('spotlight-round-label').textContent = 'دليل الجولة ' + round;
 
   if (isNew) {
+    notifyLocal('دليل جديد', 'ظهر دليل جديد في الجولة ' + round + ' - افتح اللعبة بسرعة');
     document.getElementById('spotlight-clues-wrap').innerHTML = '<div style="padding:10px;"><div class="spinner"></div></div>';
     ensureRoomGameLoaded().then(function(game) {
       const clues = ((game && game.clues) || []).filter(function(c) { return (c.round || 1) === round; });
@@ -1527,7 +1938,7 @@ async function kickPlayerFromRoom(uid) {
   if (currentRoom.status !== 'waiting') { showToast('التاعب مينفعش غير قبل بدء اللعبة'); return; }
   try {
     await db.collection('rooms').doc(currentRoomId).collection('players').doc(uid).delete();
-    showToast('تم طرد اللاعب');
+    showToast('تم طرد اللاعب', 'success');
   } catch (e) { showToast('تعذر طرد اللاعب'); }
 }
 
@@ -1561,10 +1972,11 @@ function buildRoundDots(current, total, done) {
 function renderChatMsg(msg, container) {
   const isMe = msg.uid === currentUser.uid;
   const isSystem = msg.type === 'system';
+  const isLastWords = msg.type === 'lastwords';
   const div = document.createElement('div');
-  div.className = 'chat-msg' + (isSystem ? ' system' : isMe ? ' mine' : ' other');
+  div.className = 'chat-msg' + (isSystem ? ' system' : isMe ? ' mine' : ' other') + (isLastWords ? ' last-words' : '');
   if (!isSystem) {
-    div.innerHTML = '<div class="chat-msg-sender">' + (msg.alias || '') + '</div>'
+    div.innerHTML = '<div class="chat-msg-sender">' + (isLastWords ? 'الكلمة الأخيرة لـ ' : '') + (msg.alias || '') + '</div>'
       + '<div>' + escapeHtml(msg.text || '') + '</div>'
       + '<div class="chat-msg-time">' + formatTime(msg.time) + '</div>';
   } else {
@@ -1657,10 +2069,19 @@ function buildClueCard(clue, idx) {
 function renderPlayers(snap) {
   const container = document.getElementById('players-list');
   container.innerHTML = '';
-  snap.forEach(d => {
-    const p = d.data();
+  const now = Date.now();
+  const items = snap.docs ? snap.docs.map(d => ({ uid: d.id, ...d.data() })) : snap;
+  items.forEach(p => {
     const eliminated = (currentRoom && currentRoom.eliminatedPlayers && currentRoom.eliminatedPlayers.includes(p.uid));
     const isMe = p.uid === currentUser.uid;
+    let statusClass = 'status-eliminated', statusText = 'خرج';
+    if (!eliminated) {
+      // حالة الاتصال لحظيًا - بنعتمد على آخر نبضة (heartbeat) وصلت من جهاز اللاعب كل 20 ثانية
+      const lastActiveMs = (p.lastActive && p.lastActive.toMillis) ? p.lastActive.toMillis() : 0;
+      const online = (now - lastActiveMs) < 35000;
+      statusClass = online ? 'status-active' : 'status-offline';
+      statusText = online ? 'متصل الآن' : 'غير متصل';
+    }
     container.innerHTML += '<div class="player-item" onclick="openPlayerCard(\'' + p.uid + '\',\'' + escapeHtml(p.alias || '') + '\',\'' + escapeHtml(p.name || '') + '\',\'' + escapeHtml(p.bio || '') + '\')">'
       + '<div class="player-avatar">'
       + '<img class="player-avatar-logo" src="https://i.ibb.co/NdHgx21b/logo.png" alt="" draggable="false" oncontextmenu="return false">'
@@ -1669,8 +2090,8 @@ function renderPlayers(snap) {
       + '<div class="player-name">' + escapeHtml(p.name || 'لاعب') + (isMe ? ' <span style="font-size:0.7rem;color:var(--accent-gold-dim)">(انت)</span>' : '') + '</div>'
       + '<div class="player-alias">' + escapeHtml(p.alias || '') + '</div>'
       + '</div>'
-      + '<div class="player-status ' + (eliminated ? 'status-eliminated' : 'status-active') + '">'
-      + (eliminated ? 'خرج' : 'نشط')
+      + '<div class="player-status ' + statusClass + '">'
+      + statusText
       + '</div>'
       + '</div>';
   });
@@ -1697,12 +2118,19 @@ function renderVotes(snap) {
   });
 }
 
+// عدد اللاعبين النشطين (اللي لسه في اللعبة، مش خارجين) دلوقتي
+function activePlayerCount() {
+  const eliminatedSet = (currentRoom && currentRoom.eliminatedPlayers) || [];
+  return lastPlayersArr.filter(p => eliminatedSet.indexOf(p.uid) === -1).length;
+}
+
 function selectVote(uid) {
-  // كان الشرط بيمنع التصويت للمقصيين اللي مش في وضع المشاهدة فقط، وده كان بيسمح
-  // (1) للاعب المقصي اللي دخل وضع المشاهدة انه يصوت برضو، و(2) لأي حد بيتفرج على غرفة مش لاعب فيها
-  // إنه يصوت. اتصلحت هنا عشان "ميعرفش يتحكم أو يلعب" فعلاً تنطبق على كل مشاهد وكل مقصي
-  if (isEliminated || isSpectator) return;
+  // متفرج حقيقي (مكنش لاعب اصلاً) او كابو اتكشف = ممنوع يصوت. الاقصاء البريء لسه يقدر يصوت "كشبح" في الجولات الجاية
+  if (isTrueSpectator || (isEliminated && ownIsCapo)) return;
   if (!currentRoom || !currentRoom.votingOpen) return;
+  // فضل لاعبين نشطين اتنين بس - أي تصويت بينهم هيتعادل كل مرة (كل واحد مش هيقدر يصوت غير للتاني).
+  // في الحالة دي الأبرياء اللي خرجوا قبل كده (الأشباح) بس هما اللي يحسموا مين الكابو، مش الاتنين الباقيين
+  if (!isEliminated && activePlayerCount() <= 2) { showToast('العدد وصل لاتنين بس - الأشباح (اللي خرجوا) هما بس اللي يحسموا دلوقتي', 'info'); return; }
   selectedVote = uid;
   document.querySelectorAll('.vote-candidate').forEach(el => {
     el.classList.toggle('selected', el.dataset.uid === uid);
@@ -1721,11 +2149,11 @@ async function submitVote() {
       round: currentRoom.currentRound || 1,
       time: firebase.firestore.FieldValue.serverTimestamp()
     });
-    votedRound = currentRoom.currentRound || 1;
+    votedRound = (currentRoom.currentRound || 1) + ':' + (currentRoom.voteEndsAt ? currentRoom.voteEndsAt.toMillis() : '');
     document.getElementById('btn-submit-vote').disabled = true;
     document.getElementById('btn-submit-vote').textContent = 'تم التصويت';
-    showToast('تم تسجيل تصويتك');
-  } catch (e) { showToast('فشل التصويت'); }
+    showToast('تم تسجيل تصويتك', 'success');
+  } catch (e) { showToast('فشل التصويت', 'error'); }
 }
 
 function buildVoteCandidates(players) {
@@ -1752,8 +2180,9 @@ function buildVoteCandidates(players) {
   // اعادة ضبط زر التصويت حسب الجولة الحالية: لو صوّت فيها خليه معطل بـ"تم التصويت"، غير كده رجّعه لوضعه الافتراضي
   const submitBtn = document.getElementById('btn-submit-vote');
   const round = currentRoom ? (currentRoom.currentRound || 1) : 1;
+  const roundKey = round + ':' + (currentRoom && currentRoom.voteEndsAt ? currentRoom.voteEndsAt.toMillis() : '');
   if (submitBtn) {
-    if (votedRound === round) {
+    if (votedRound === roundKey) {
       submitBtn.disabled = true;
       submitBtn.textContent = 'تم التصويت';
     } else {
@@ -1774,7 +2203,7 @@ function showGameEnded() {
   resultMascot.style.display = 'none';
 
   // "فريقك" فاز ولا لأ - بناءً على هل انت كابو ولا لأ (مش بس هل نجيت من الاقصاء)
-  const iAmSpectatorLike = isSpectator;
+  const iAmSpectatorLike = isTrueSpectator;
   const iWon = capoWon ? ownIsCapo : !ownIsCapo;
 
   if (iAmSpectatorLike) {
@@ -1786,13 +2215,13 @@ function showGameEnded() {
   } else if (iWon) {
     resultIcon.className = 'game-result-icon result-win';
     resultIcon.innerHTML = '<svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
-    resultTitle.textContent = 'مبروك! ربحت 🎉';
+    resultTitle.textContent = 'مبروك! ربحت';
     resultTitle.style.color = '#7ecba4';
     resultSub.textContent = capoWon ? 'نجحت تختبي من الكل لحد النهاية - انت كابو محترف' : 'كشفت كابو وأنقذت الكل - شغل محقق حقيقي';
   } else {
     resultIcon.className = 'game-result-icon result-lose';
     resultIcon.innerHTML = '<svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
-    resultTitle.textContent = 'ضـــاع حقي 😭';
+    resultTitle.textContent = 'ضـــاع حقي';
     resultTitle.style.color = 'var(--accent-red-bright)';
     resultTitle.classList.add('lose-shake');
     resultSub.textContent = capoWon ? 'كابو ختلكم كلكم لحد النهاية' : 'اتكشفت... المرة الجاية بقى شاطر';
@@ -1803,7 +2232,53 @@ function showGameEnded() {
   document.getElementById('waiting-screen').style.display = 'none';
   document.getElementById('active-game-area').style.display = 'none';
   document.getElementById('game-ended-screen').classList.add('show');
+
+  const reportBtn = document.getElementById('btn-toggle-report');
+  const reportWrap = document.getElementById('game-report-wrap');
+  if (reportBtn) reportBtn.style.display = (currentRoom && currentRoom.finalRoles) ? 'block' : 'none';
+  if (reportWrap) reportWrap.style.display = 'none';
+  if (reportBtn) reportBtn.textContent = 'شوف تقرير اللعبة';
 }
+
+// ===== END-OF-GAME REPORT (كشف الأدوار + تقرير التصويت لكل جولة) =====
+async function toggleGameReport() {
+  const wrap = document.getElementById('game-report-wrap');
+  const btn = document.getElementById('btn-toggle-report');
+  if (!wrap) return;
+  const opening = wrap.style.display === 'none';
+  wrap.style.display = opening ? 'block' : 'none';
+  if (btn) btn.textContent = opening ? 'اخفاء التقرير' : 'شوف تقرير اللعبة';
+  if (!opening || !currentRoomId) return;
+
+  const rolesList = document.getElementById('final-roles-list');
+  if (rolesList) {
+    const roles = (currentRoom && currentRoom.finalRoles) || [];
+    rolesList.innerHTML = roles.map(function(r) {
+      return '<div class="player-item" style="cursor:default;">'
+        + '<div><div class="player-name">' + escapeHtml(r.alias) + (r.isCapo ? ' <span style="color:var(--accent-red-bright);font-size:0.72rem;">(كابو)</span>' : '') + '</div>'
+        + '<div class="player-alias">' + escapeHtml(r.characterName || '') + '</div></div>'
+        + '</div>';
+    }).join('') || '<div class="empty-note">لا يوجد بيانات</div>';
+  }
+
+  const historyList = document.getElementById('vote-history-list');
+  if (historyList) {
+    historyList.innerHTML = '<div class="spinner"></div>';
+    try {
+      const snap = await db.collection('rooms').doc(currentRoomId).collection('voteHistory').orderBy('round').get();
+      if (snap.empty) { historyList.innerHTML = '<div class="empty-note">لا يوجد تصويتات مسجلة</div>'; return; }
+      historyList.innerHTML = snap.docs.map(function(d) {
+        const h = d.data();
+        const votesHtml = (h.votes || []).map(function(v) {
+          return '<div class="chat-msg-time">' + escapeHtml(v.voterAlias) + ' → ' + escapeHtml(v.targetAlias) + '</div>';
+        }).join('');
+        const headline = h.tie ? ('جولة ' + h.round + ' - تعادل (محدش خرج)') : ('جولة ' + h.round + ' - خرج: ' + escapeHtml(h.eliminatedAlias || ''));
+        return '<div class="clue-card" style="margin-bottom:10px;"><div class="clue-card-head"><div class="clue-title">' + headline + '</div></div><div class="clue-body">' + votesHtml + '</div></div>';
+      }).join('');
+    } catch (e) { historyList.innerHTML = '<div class="empty-note">تعذر تحميل التقرير</div>'; }
+  }
+}
+window.toggleGameReport = toggleGameReport;
 
 // يطلّع اللاعب برا الغرفة تمامًا عشان يختار لعبة تانية من الاول (مش نفس قائمة العاب الغرفة دي)
 function playDifferentGame() {
@@ -1813,13 +2288,44 @@ function playDifferentGame() {
 }
 window.playDifferentGame = playDifferentGame;
 
+// بيبعت "الكلمة الأخيرة" للاعب اللي اتقصى للشات، وبعدين يدخله وضع المشاهدة
+async function sendLastWords() {
+  const input = document.getElementById('last-words-input');
+  const text = input ? input.value.trim() : '';
+  if (text && currentRoomId && currentUser) {
+    try {
+      await db.collection('rooms').doc(currentRoomId).collection('chat').add({
+        uid: currentUser.uid,
+        alias: (currentUserData && currentUserData.alias) || 'PLAYER',
+        text: text,
+        type: 'lastwords',
+        time: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (e) {}
+  }
+  if (input) input.value = '';
+  goSpectator();
+}
+window.sendLastWords = sendLastWords;
+
 function goSpectator() {
   isSpectator = true;
   document.getElementById('eliminated-overlay').classList.remove('show');
   document.getElementById('spectator-bar').classList.add('show');
+  const roomCodeBox = document.getElementById('room-code-box');
+  if (roomCodeBox) roomCodeBox.style.display = 'none';
+  const shareBtnWaiting = document.getElementById('btn-share-room-waiting');
+  if (shareBtnWaiting) shareBtnWaiting.style.display = 'none';
 }
 
 async function exitRoom() {
+  const isOwnerLeaving = currentRoom && currentUser && currentRoom.ownerUid === currentUser.uid && currentRoom.status !== 'deleted';
+  if (isOwnerLeaving) {
+    const closeIt = confirm('انت صاحب الغرفة. تحب تقفل الغرفة للجميع قبل ما تخرج؟\n(اضغط "الغاء" لو عايز تسيب الغرفة مفتوحة للباقيين)');
+    if (closeIt) {
+      try { await db.collection('rooms').doc(currentRoomId).update({ status: 'deleted' }); } catch (e) {}
+    }
+  }
   clearRoomListeners();
   resetRoomFeatureState();
   if (currentRoomId && currentUser) {
@@ -1831,6 +2337,7 @@ async function exitRoom() {
   currentRoomId = null;
   isEliminated = false;
   isSpectator = false;
+  isTrueSpectator = false;
   document.getElementById('bottom-nav').classList.add('visible');
   document.getElementById('eliminated-overlay').classList.remove('show');
   document.getElementById('spectator-bar').classList.remove('show');
@@ -1896,14 +2403,15 @@ function shareRoomLink() {
 
 // ===== NOTIFICATIONS =====
 async function loadNotifications() {
+  const container = document.getElementById('notifications-list');
+  const previewContainer = document.getElementById('home-notifs-preview');
   try {
+    // ملحوظة: شيلنا فلتر targetAll==true من هنا لأنه مع orderBy(time) محتاج composite index في Firestore،
+    // ولو الاندكس مش موجود الكويري كانت بتفشل بصمت والاشعارات ماكنتش بتظهر خالص من غير أي رسالة خطأ
     const snap = await db.collection('notifications')
-      .where('targetAll', '==', true)
       .orderBy('time', 'desc')
       .limit(20)
       .get();
-    const container = document.getElementById('notifications-list');
-    const previewContainer = document.getElementById('home-notifs-preview');
     container.innerHTML = '';
     previewContainer.innerHTML = '';
     let unread = false;
@@ -1922,7 +2430,11 @@ async function loadNotifications() {
       previewContainer.appendChild(items[i].cloneNode(true));
     }
     if (snap.size === 0) previewContainer.innerHTML = '<div style="padding:10px 0;color:var(--text-muted);font-size:0.8rem;">لا توجد اشعارات حديثة</div>';
-  } catch (e) { console.error(e); }
+  } catch (e) {
+    console.error(e);
+    if (container) container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:0.82rem;">تعذر تحميل الاشعارات - حاول تاني</div>';
+    if (previewContainer) previewContainer.innerHTML = '';
+  }
 }
 
 // ===== TOP PLAYERS / HALL OF FAME =====
@@ -2042,10 +2554,13 @@ async function submitGameRating() {
 window.submitGameRating = submitGameRating;
 
 // ===== UTILS =====
-function showToast(msg) {
+function showToast(msg, type) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
+  if (type === 'success') SFX.success();
+  else if (type === 'error') SFX.error();
+  else SFX.notify();
   setTimeout(() => t.classList.remove('show'), 2800);
 }
 
