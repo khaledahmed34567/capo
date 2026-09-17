@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0a0a0f">
+<link rel="manifest" id="pwa-manifest">
+<link rel="apple-touch-icon" href="https://i.ibb.co/cX7FVw1b/icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Capo Admin">
+<title>Capo - لوحة التحكم</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg-deep:#08070a; --bg-card:rgba(28,22,17,0.62); --bg-surface:rgba(38,30,23,0.55); --bg-overlay:rgba(48,38,28,0.62);
+  --accent-gold:#e5c87a; --accent-gold-dim:#a3854f; --accent-red:#7e2020; --accent-red-bright:#a1292a;
+  --text-primary:#f2e8d5; --text-secondary:#b3a890; --text-muted:#7a7060;
+  --border-subtle:rgba(229,200,122,0.14); --border-accent:rgba(229,200,122,0.35); --success:#2d6a4f; --danger:#7e2020;
+  --accent-smoke:#2e2722; --glass-blur: blur(16px) saturate(150%);
+  --font-ar:'IBM Plex Sans Arabic','IBM Plex Sans',sans-serif;
+  --font-display:'IBM Plex Sans','IBM Plex Sans Arabic',sans-serif;
+  --radius:12px; --radius-sm:8px;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;}
+body{font-family:var(--font-ar);background:var(--bg-deep);color:var(--text-primary);min-height:100vh;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-thumb{background:var(--border-subtle);border-radius:4px;}
+
+/* ===== PIN GATE ===== */
+#pin-gate{
+  position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse 70% 50% at 50% 40%,rgba(201,168,76,0.10) 0%,transparent 70%),var(--bg-deep);
+  padding:24px;
+}
+.pin-title{font-family:var(--font-display);font-weight:700;font-size:2rem;color:var(--accent-gold);letter-spacing:6px;text-transform:uppercase;margin-bottom:4px;}
+.pin-sub{color:var(--text-muted);font-size:0.8rem;letter-spacing:1px;margin-bottom:34px;}
+.pin-dots{display:flex;gap:14px;margin-bottom:28px;}
+.pin-dot{width:16px;height:16px;border-radius:50%;border:1px solid var(--border-subtle);background:var(--bg-surface);transition:.15s;}
+.pin-dot.filled{background:var(--accent-gold);border-color:var(--accent-gold);box-shadow:0 0 10px rgba(201,168,76,0.6);}
+.pin-dot.error{background:var(--accent-red-bright);border-color:var(--accent-red-bright);}
+.pin-pad{display:grid;grid-template-columns:repeat(3,64px);gap:14px;}
+.pin-key{
+  width:64px;height:64px;border-radius:50%;background:var(--bg-surface);border:1px solid var(--border-subtle);
+  color:var(--text-primary);font-family:var(--font-display);font-size:1.3rem;cursor:pointer;transition:.15s;
+  display:flex;align-items:center;justify-content:center;
+}
+.pin-key:active{background:var(--accent-smoke,#2a2a3e);border-color:var(--accent-gold-dim);transform:scale(0.95);}
+.pin-key.wide{grid-column:span 1;font-size:0.85rem;color:var(--text-muted);}
+.pin-error-msg{margin-top:18px;color:var(--accent-red-bright);font-size:0.8rem;min-height:18px;}
+
+/* ===== SHELL ===== */
+#shell{display:none;min-height:100vh;flex-direction:column;}
+#shell.show{display:flex;}
+.topbar{
+  position:sticky;top:0;z-index:10;background:var(--bg-card);border-bottom:1px solid var(--border-accent);
+  padding:16px 20px;display:flex;align-items:center;justify-content:space-between;
+  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
+}
+.topbar-title{font-family:var(--font-display);font-weight:700;color:var(--accent-gold);letter-spacing:3px;font-size:1.1rem;}
+.topbar-title span{color:var(--text-secondary);font-weight:400;font-size:0.8rem;letter-spacing:0;margin-right:8px;}
+.btn-logout{padding:8px 14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);color:var(--text-secondary);font-family:var(--font-ar);font-size:0.78rem;cursor:pointer;}
+.btn-logout:hover{border-color:var(--accent-red-bright);color:var(--accent-red-bright);}
+
+.tabs{display:flex;overflow-x:auto;gap:4px;padding:8px 12px;background:var(--bg-card);border-bottom:1px solid var(--border-subtle);scrollbar-width:none;}
+.tabs::-webkit-scrollbar{display:none;}
+.tab-btn{flex-shrink:0;padding:9px 16px;border-radius:20px;background:transparent;border:1px solid transparent;color:var(--text-muted);font-family:var(--font-ar);font-size:0.82rem;cursor:pointer;transition:.15s;}
+.tab-btn.active{background:var(--bg-surface);border-color:var(--accent-gold-dim);color:var(--accent-gold);}
+
+.view{display:none;padding:18px;max-width:900px;margin:0 auto;width:100%;}
+.view.active{display:block;}
+
+/* dashboard */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px;}
+.stat-card{background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius);padding:16px;text-align:center;}
+.stat-num{font-family:var(--font-display);font-size:1.6rem;font-weight:700;color:var(--accent-gold);}
+.stat-label{font-size:0.75rem;color:var(--text-muted);margin-top:4px;}
+
+/* cards / forms */
+.card{background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius);padding:16px;margin-bottom:14px;backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);box-shadow:inset 0 1px 0 rgba(242,232,213,0.05),0 4px 24px rgba(0,0,0,0.5);}
+.card-title{font-size:0.95rem;font-weight:600;color:var(--accent-gold);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
+.form-grid.full{grid-template-columns:1fr;}
+.f-group{display:flex;flex-direction:column;gap:5px;}
+.f-label{font-size:0.75rem;color:var(--text-secondary);}
+.f-input,.f-select,.f-textarea{
+  width:100%;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);
+  color:var(--text-primary);font-family:var(--font-ar);font-size:0.85rem;outline:none;
+}
+.f-input:focus,.f-select:focus,.f-textarea:focus{border-color:var(--accent-gold-dim);}
+.f-textarea{resize:vertical;min-height:60px;}
+.f-check{display:flex;align-items:center;gap:8px;font-size:0.82rem;color:var(--text-secondary);}
+
+.btn{padding:10px 18px;border:none;border-radius:var(--radius-sm);font-family:var(--font-ar);font-size:0.85rem;font-weight:600;cursor:pointer;transition:.15s;}
+.btn-gold{background:linear-gradient(135deg,#8a6d28,var(--accent-gold));color:#0a0a0f;}
+.btn-gold:hover{filter:brightness(1.1);}
+.btn-outline{background:transparent;border:1px solid var(--border-subtle);color:var(--text-secondary);}
+.btn-outline:hover{border-color:var(--accent-gold-dim);color:var(--accent-gold);}
+.btn-danger{background:transparent;border:1px solid var(--accent-red);color:#e8a0a0;}
+.btn-danger:hover{background:rgba(139,28,28,0.15);}
+.btn-sm{padding:6px 12px;font-size:0.75rem;}
+
+/* list items */
+.list{display:flex;flex-direction:column;gap:8px;}
+.item-row{background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);padding:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.item-main{flex:1;min-width:150px;}
+.item-title{font-size:0.88rem;font-weight:600;color:var(--text-primary);}
+.item-sub{font-size:0.75rem;color:var(--text-muted);margin-top:2px;line-height:1.5;}
+.item-actions{display:flex;gap:6px;}
+.badge{padding:2px 9px;border-radius:20px;font-size:0.68rem;font-weight:600;}
+.badge-waiting{background:rgba(201,168,76,0.15);color:var(--accent-gold);}
+.badge-active{background:rgba(45,106,79,0.25);color:#7ecba4;}
+.badge-ended{background:rgba(139,28,28,0.2);color:#e8a0a0;}
+.badge-on{background:rgba(45,106,79,0.25);color:#7ecba4;}
+.badge-off{background:var(--bg-overlay);color:var(--text-muted);}
+.empty-note{padding:20px;text-align:center;color:var(--text-muted);font-size:0.82rem;}
+
+.player-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-overlay);border:1px solid var(--border-subtle);border-radius:20px;padding:4px 10px;font-size:0.72rem;margin:3px;}
+.player-chip.elim{border-color:var(--accent-red);color:#e8a0a0;}
+.player-chip button{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.85rem;line-height:1;}
+
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--bg-card);border:1px solid var(--border-subtle);color:var(--text-primary);padding:11px 20px;border-radius:20px;font-size:0.82rem;opacity:0;pointer-events:none;transition:.25s;z-index:60;}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+</style>
+</head>
+<body>
+
+<!-- ===== PIN GATE ===== -->
+<div id="pin-gate">
+  <div class="pin-title">CAPO</div>
+  <div class="pin-sub">لوحة التحكم - ادخل رمز الدخول</div>
+  <div class="pin-dots" id="pin-dots">
+    <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+  </div>
+  <div class="pin-pad" id="pin-pad">
+    <button class="pin-key" data-k="1">1</button>
+    <button class="pin-key" data-k="2">2</button>
+    <button class="pin-key" data-k="3">3</button>
+    <button class="pin-key" data-k="4">4</button>
+    <button class="pin-key" data-k="5">5</button>
+    <button class="pin-key" data-k="6">6</button>
+    <button class="pin-key" data-k="7">7</button>
+    <button class="pin-key" data-k="8">8</button>
+    <button class="pin-key" data-k="9">9</button>
+    <button class="pin-key wide" data-k="clear">مسح</button>
+    <button class="pin-key" data-k="0">0</button>
+    <button class="pin-key wide" data-k="back">⌫</button>
+  </div>
+  <div class="pin-error-msg" id="pin-error"></div>
+</div>
+
+<!-- ===== SHELL ===== -->
+<div id="shell">
+  <div class="topbar">
+    <div class="topbar-title">CAPO <span>لوحة التحكم</span></div>
+    <button class="btn-logout" id="btn-logout">خروج</button>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button class="tab-btn active" data-tab="dashboard">الرئيسية</button>
+    <button class="tab-btn" data-tab="games">الألعاب</button>
+    <button class="tab-btn" data-tab="rooms">الغرف</button>
+    <button class="tab-btn" data-tab="users">المستخدمون</button>
+    <button class="tab-btn" data-tab="coupons">الأكواد</button>
+    <button class="tab-btn" data-tab="notifications">الإشعارات</button>
+    <button class="tab-btn" data-tab="ratings">التقييمات</button>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div class="view active" id="view-dashboard">
+    <div class="stat-grid" id="stat-grid">
+      <div class="stat-card"><div class="stat-num" id="stat-users">-</div><div class="stat-label">مستخدم</div></div>
+      <div class="stat-card"><div class="stat-num" id="stat-games">-</div><div class="stat-label">لعبة</div></div>
+      <div class="stat-card"><div class="stat-num" id="stat-rooms">-</div><div class="stat-label">غرفة نشطة</div></div>
+      <div class="stat-card"><div class="stat-num" id="stat-ratings">-</div><div class="stat-label">تقييم</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">اتصال قاعدة البيانات</div>
+      <div class="item-sub" id="conn-status">جارٍ التحقق من الاتصال...</div>
+    </div>
+  </div>
+
+  <!-- GAMES -->
+  <div class="view" id="view-games">
+    <div class="card">
+      <div class="card-title">اضافة / تعديل لعبة</div>
+      <input type="hidden" id="game-id">
+      <div class="form-grid">
+        <div class="f-group"><div class="f-label">اسم اللعبة</div><input class="f-input" id="game-name" placeholder="مثال: كابو الأصلي"></div>
+        <div class="f-group"><div class="f-label">التصنيف</div><input class="f-input" id="game-category" placeholder="جريمة"></div>
+      </div>
+      <div class="form-grid full">
+        <div class="f-group"><div class="f-label">الوصف</div><textarea class="f-textarea" id="game-desc"></textarea></div>
+      </div>
+      <div class="form-grid full">
+        <div class="f-group">
+          <div class="f-label">قصة القضية (تظهر لكل اللاعبين لمدة 60 ثانية بس أول ما اللعبة تبدأ، قبل ما الأدلة تظهر)</div>
+          <textarea class="f-textarea" id="game-case-story" placeholder="مثال: في ليلة ممطرة، عُثر على جثة التاجر يوسف في مكتبه المغلق من الداخل. لا أثر لاقتحام، ولا بصمات غريبة. أحد الحاضرين في الحفلة الليلة هو القاتل..." style="min-height:110px;"></textarea>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="f-group">
+          <div class="f-label">صورة الغلاف</div>
+          <input class="f-input" id="game-cover" placeholder="https://..." style="direction:ltr;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+            <input type="file" accept="image/*" id="game-cover-file" style="display:none;" onchange="uploadGameCoverImage(this)">
+            <button class="btn btn-outline btn-sm" type="button" onclick="document.getElementById('game-cover-file').click()">رفع صورة الغلاف</button>
+            <span id="game-cover-status" style="font-size:0.72rem;color:var(--text-muted);"></span>
+            <img id="game-cover-preview" src="" style="height:40px;border-radius:6px;display:none;">
+          </div>
+        </div>
+        <div class="f-group"><div class="f-label">السعر (اتركه 0 للمجاني)</div><input class="f-input" id="game-price" type="number" placeholder="0"></div>
+      </div>
+      <div class="form-grid">
+        <div class="f-group"><div class="f-label">عدد الجولات</div><input class="f-input" id="game-rounds" type="number" placeholder="5"></div>
+        <div class="f-group"><div class="f-label">أعداد اللاعبين (مفصولة بفاصلة)</div><input class="f-input" id="game-playercounts" placeholder="4,6,8"></div>
+        <div class="f-group"><div class="f-label">مستوى الصعوبة</div>
+          <select class="f-input" id="game-difficulty">
+            <option value="easy">سهل</option>
+            <option value="medium" selected>متوسط</option>
+            <option value="hard">صعب</option>
+          </select>
+        </div>
+        <div class="f-group"><div class="f-label">رابط أيقونة/تميمة اللعبة (تظهر على وش الكارت)</div><input class="f-input" id="game-mascot" placeholder="https://..." style="direction:ltr;"></div>
+      </div>
+
+      <!-- CHARACTERS -->
+      <div class="card-title" style="margin-top:14px;font-size:0.85rem;">الشخصيات (حدد حتى 3 كابو) <button class="btn btn-outline btn-sm" onclick="addCharacterRow()" type="button">+ اضافة شخصية</button></div>
+      <div id="characters-list"></div>
+
+      <!-- CLUES -->
+      <div class="card-title" style="margin-top:14px;font-size:0.85rem;">الأدلة لكل جولة <button class="btn btn-outline btn-sm" onclick="addClueRow()" type="button">+ اضافة دليل</button></div>
+      <div id="clues-editor-list"></div>
+
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <button class="btn btn-gold" id="btn-save-game">حفظ اللعبة</button>
+        <button class="btn btn-outline" id="btn-clear-game">تفريغ الحقول</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">الألعاب الحالية <button class="btn btn-outline btn-sm" id="btn-refresh-games">تحديث</button></div>
+      <div class="list" id="games-list"><div class="empty-note">جارٍ التحميل...</div></div>
+    </div>
+  </div>
+
+  <!-- ROOMS -->
+  <div class="view" id="view-rooms">
+    <div class="card">
+      <div class="card-title">انشاء غرفة جديدة</div>
+      <div class="form-grid">
+        <div class="f-group"><div class="f-label">اللعبة</div><select class="f-select" id="room-game"></select></div>
+        <div class="f-group"><div class="f-label">عدد الجولات الكلي</div><input class="f-input" id="room-total-rounds" type="number" value="5"></div>
+      </div>
+      <button class="btn btn-gold" id="btn-create-room">انشاء الغرفة</button>
+    </div>
+    <div class="card">
+      <div class="card-title">الغرف الحالية <button class="btn btn-outline btn-sm" id="btn-refresh-rooms">تحديث</button></div>
+      <div class="list" id="rooms-list"><div class="empty-note">جارٍ التحميل...</div></div>
+    </div>
+  </div>
+
+  <!-- USERS -->
+  <div class="view" id="view-users">
+    <div class="card">
+      <div class="card-title">بحث</div>
+      <input class="f-input" id="user-search" placeholder="ابحث بالاسم، اللقب، البريد او اسم المستخدم">
+    </div>
+    <div class="card">
+      <div class="card-title">تعديل بيانات مستخدم</div>
+      <input type="hidden" id="user-id">
+      <div class="form-grid">
+        <div class="f-group"><div class="f-label">الاسم الاول</div><input class="f-input" id="user-fname"></div>
+        <div class="f-group"><div class="f-label">اسم العائلة</div><input class="f-input" id="user-lname"></div>
+      </div>
+      <div class="form-grid">
+        <div class="f-group"><div class="f-label">اللقب</div><input class="f-input" id="user-alias"></div>
+        <div class="f-group"><div class="f-label">اسم المستخدم</div><input class="f-input" id="user-username"></div>
+      </div>
+      <div class="form-grid">
+        <div class="f-group"><div class="f-label">رقم الهاتف</div><input class="f-input" id="user-phone" style="direction:ltr;"></div>
+        <div class="f-group"><div class="f-label">رصيد المحفظة (جنيه)</div><input class="f-input" type="number" id="user-wallet" style="direction:ltr;"></div>
+      </div>
+      <div class="form-grid full">
+        <div class="f-group"><div class="f-label">البريد الالكتروني (للعرض فقط - غيّره من Firebase Authentication)</div><input class="f-input" id="user-email" disabled style="direction:ltr;opacity:0.6;"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:6px;">
+        <button class="btn btn-primary btn-sm" id="btn-save-user">حفظ التعديلات</button>
+        <button class="btn btn-outline btn-sm" id="btn-clear-user" type="button">تفريغ</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">المستخدمون <button class="btn btn-outline btn-sm" id="btn-refresh-users">تحديث</button></div>
+      <div class="list" id="users-list"><div class="empty-note">جارٍ التحميل...</div></div>
+    </div>
+  </div>
+
+  <!-- COUPONS -->
+  <div class="view" id="view-coupons">
+    <div class="card">
+      <div class="card-title">اضافة كود خصم</div>
+      <div class="form-grid">
+        <div class="f-group"><div class="f-label">الكود</div><input class="f-input" id="coupon-code" placeholder="CAPO2026" style="direction:ltr;text-transform:uppercase;"></div>
+        <div class="f-group"><div class="f-label">نسبة الخصم %</div><input class="f-input" id="coupon-discount" type="number" placeholder="100"></div>
+      </div>
+      <div class="form-grid">
+        <div class="f-group"><div class="f-label">مخصص للعبة معينة (اختياري)</div><select class="f-select" id="coupon-game"><option value="">كل الالعاب</option></select></div>
+        <div class="f-group"><div class="f-label">الحالة</div>
+          <label class="f-check"><input type="checkbox" id="coupon-active" checked> فعّال</label>
+        </div>
+      </div>
+      <button class="btn btn-gold" id="btn-save-coupon">حفظ الكود</button>
+    </div>
+    <div class="card">
+      <div class="card-title">الأكواد الحالية <button class="btn btn-outline btn-sm" id="btn-refresh-coupons">تحديث</button></div>
+      <div class="list" id="coupons-list"><div class="empty-note">جارٍ التحميل...</div></div>
+    </div>
+  </div>
+
+  <!-- NOTIFICATIONS -->
+  <div class="view" id="view-notifications">
+    <div class="card">
+      <div class="card-title">إشعار جديد لجميع المستخدمين</div>
+      <div class="form-grid full">
+        <div class="f-group"><div class="f-label">نص الإشعار</div><textarea class="f-textarea" id="notif-text" placeholder="مثال: لعبة جديدة متاحة الآن!"></textarea></div>
+      </div>
+      <button class="btn btn-gold" id="btn-send-notif">إرسال</button>
+    </div>
+    <div class="card">
+      <div class="card-title">آخر الإشعارات <button class="btn btn-outline btn-sm" id="btn-refresh-notifs">تحديث</button></div>
+      <div class="list" id="notifs-list"><div class="empty-note">جارٍ التحميل...</div></div>
+    </div>
+  </div>
+
+  <!-- RATINGS -->
+  <div class="view" id="view-ratings">
+    <div class="card">
+      <div class="card-title">التقييمات <button class="btn btn-outline btn-sm" id="btn-refresh-ratings">تحديث</button></div>
+      <div class="list" id="ratings-list"><div class="empty-note">جارٍ التحميل...</div></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Firebase compat SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+
+<script>
+// ============================================================
+//  CAPO - ADMIN PANEL  (single self-contained file, PIN 9033)
+// ============================================================
+
+const ADMIN_PIN = '9033';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDwo9ylUI7cq7DodekA0vM7iMw-6COp3BI",
+  authDomain: "saemad-8a204.firebaseapp.com",
+  projectId: "saemad-8a204",
+  storageBucket: "saemad-8a204.firebasestorage.app",
+  messagingSenderId: "676932025599",
+  appId: "1:676932025599:web:0076ca1cabc132883a60ca",
+  measurementId: "G-JXTFZ6LGMQ"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ===== PWA: يتثبت كتطبيق حقيقي (مش اختصار) بنفس منطق تطبيق اللاعبين =====
+(function setupManifest() {
+  const appUrl = window.location.origin + window.location.pathname;
+  const manifest = {
+    id: appUrl,
+    name: "Capo Admin - لوحة التحكم",
+    short_name: "Capo Admin",
+    description: "لوحة تحكم لعبة Capo",
+    start_url: appUrl,
+    scope: appUrl,
+    display: "standalone",
+    background_color: "#050508",
+    theme_color: "#0a0a0f",
+    orientation: "portrait",
+    icons: [
+      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "512x512", type: "image/png", purpose: "any" },
+      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "192x192", type: "image/png", purpose: "maskable" },
+      { src: "https://i.ibb.co/cX7FVw1b/icon.png", sizes: "512x512", type: "image/png", purpose: "maskable" }
+    ]
+  };
+  const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  document.getElementById('pwa-manifest').href = url;
+})();
+(function setupServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const swSource = "self.addEventListener('install',function(e){self.skipWaiting();});"
+    + "self.addEventListener('activate',function(e){self.clients.claim();});"
+    + "self.addEventListener('fetch',function(e){});"; // pass-through, يخلي التطبيق قابل للتثبيت
+  const swBlob = new Blob([swSource], { type: 'application/javascript' });
+  const swUrl = URL.createObjectURL(swBlob);
+  navigator.serviceWorker.register(swUrl).catch(function() {});
+})();
+// لوحة التحكم كانت بتتعامل مع Firestore من غير أي تسجيل دخول لفايربيز (فقط رمز PIN شكلي في المتصفح)
+// لو قواعد الأمان (Firestore Rules) بتشترط "request.auth != null" هيفشل أي حذف/تعديل بصمت
+// تسجيل دخول مجهول (anonymous) يضمن وجود "auth" صالح لعمليات الأدمن
+firebase.auth().signInAnonymously().catch(function(e){ console.error('admin anonymous auth failed', e); });
+
+// ---------- helpers ----------
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
+}
+function escapeHtml(str) {
+  return String(str == null ? '' : str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('ar-EG') + ' ' + d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+// ---------- PIN GATE ----------
+let pinEntry = '';
+function renderPinDots() {
+  const dots = document.querySelectorAll('.pin-dot');
+  dots.forEach((d, i) => d.classList.toggle('filled', i < pinEntry.length));
+}
+function pinError() {
+  const dots = document.querySelectorAll('.pin-dot');
+  dots.forEach(d => d.classList.add('error'));
+  document.getElementById('pin-error').textContent = 'رمز غير صحيح، حاول مرة اخرى';
+  setTimeout(() => {
+    dots.forEach(d => d.classList.remove('error'));
+    pinEntry = '';
+    renderPinDots();
+  }, 500);
+}
+document.getElementById('pin-pad').addEventListener('click', (e) => {
+  const btn = e.target.closest('.pin-key');
+  if (!btn) return;
+  const k = btn.dataset.k;
+  if (k === 'clear') { pinEntry = ''; renderPinDots(); document.getElementById('pin-error').textContent=''; return; }
+  if (k === 'back') { pinEntry = pinEntry.slice(0, -1); renderPinDots(); return; }
+  if (pinEntry.length >= 4) return;
+  pinEntry += k;
+  renderPinDots();
+  if (pinEntry.length === 4) {
+    setTimeout(() => {
+      if (pinEntry === ADMIN_PIN) {
+        document.getElementById('pin-gate').style.display = 'none';
+        document.getElementById('shell').classList.add('show');
+        initAdmin();
+      } else {
+        pinError();
+      }
+    }, 120);
+  }
+});
+document.getElementById('btn-logout').addEventListener('click', () => {
+  document.getElementById('shell').classList.remove('show');
+  document.getElementById('pin-gate').style.display = 'flex';
+  pinEntry = '';
+  renderPinDots();
+  document.getElementById('pin-error').textContent = '';
+});
+
+// ---------- TABS ----------
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn) return;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('view-' + btn.dataset.tab).classList.add('active');
+});
+
+let adminInitDone = false;
+function initAdmin() {
+  if (adminInitDone) return;
+  adminInitDone = true;
+  loadDashboard();
+  loadGames();
+  loadRooms();
+  loadUsers();
+  loadCoupons();
+  loadNotifs();
+  loadRatings();
+}
+
+// ---------- DASHBOARD ----------
+async function loadDashboard() {
+  // كانت بتنزل كل الـ collections كاملة (users/games/ratings) بس عشان تعرض عدد بسيط
+  // ده كان أكبر سبب لبطء فتح لوحة التحكم، خصوصاً إن نفس الكولكشنز بتتنزل تاني في loadUsers/loadGames
+  // count() كان المفروض يرجع رقم العد من السيرفر من غير تنزيل المستندات نفسها
+  // لكن ظهر الخطأ "db.collection(...).count is not a function" لأن aggregate queries (count())
+  // مش متاحة/مدعومة في نسخة الـ SDK المحمّلة فعليًا وقت التشغيل (رغم إن firebase-firestore-compat.js
+  // المكتوب في السكريبت تاج بيشاور على نسخة بتدعمها من الأساس) — فبنرجع لطريقة get().size
+  // اللي شغالة مع أي نسخة SDK بدون أي اعتماد على count()
+  try {
+    const [usersSnap, gamesSnap, roomsSnap, ratingsSnap] = await Promise.all([
+      db.collection('users').get(),
+      db.collection('games').get(),
+      db.collection('rooms').where('status', 'in', ['waiting', 'active']).get(),
+      db.collection('ratings').get()
+    ]);
+    document.getElementById('stat-users').textContent = usersSnap.size;
+    document.getElementById('stat-games').textContent = gamesSnap.size;
+    document.getElementById('stat-rooms').textContent = roomsSnap.size;
+    document.getElementById('stat-ratings').textContent = ratingsSnap.size;
+    document.getElementById('conn-status').textContent = 'متصل بقاعدة البيانات بنجاح ✓';
+  } catch (e) {
+    document.getElementById('conn-status').textContent = 'تعذر الاتصال بقاعدة البيانات: ' + e.message;
+  }
+}
+
+// ---------- CHARACTERS (per-game roster, used to randomly assign roles when a room starts) ----------
+let gameCharactersDraft = [];
+function renderCharactersDraft() {
+  const el = document.getElementById('characters-list');
+  const capoCount = gameCharactersDraft.filter(c => c.isCapo).length;
+  el.innerHTML = gameCharactersDraft.map((c, i) =>
+    '<div class="item-row" style="align-items:flex-start;">' +
+      '<div class="item-main" style="display:flex;flex-direction:column;gap:6px;">' +
+        '<input class="f-input" placeholder="اسم الشخصية" value="' + escapeHtml(c.name) + '" oninput="updateCharacterField(' + i + ',\'name\',this.value)">' +
+        '<textarea class="f-textarea" placeholder="نبذة عن الشخصية يقرأها اللاعب" oninput="updateCharacterField(' + i + ',\'bio\',this.value)">' + escapeHtml(c.bio) + '</textarea>' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--text-secondary);">' +
+          '<input type="checkbox" ' + (c.isCapo ? 'checked' : '') + (!c.isCapo && capoCount >= 3 ? ' disabled' : '') + ' onchange="toggleCapo(' + i + ',this.checked)"> هذه الشخصية كابو' +
+        '</label>' +
+      '</div>' +
+      '<div class="item-actions"><button class="btn btn-danger btn-sm" type="button" onclick="removeCharacterRow(' + i + ')">حذف</button></div>' +
+    '</div>'
+  ).join('') || '<div class="empty-note">لا توجد شخصيات بعد</div>';
+}
+window.addCharacterRow = function() {
+  gameCharactersDraft.push({ id: 'c' + Date.now() + Math.floor(Math.random()*1000), name: '', bio: '', isCapo: false });
+  renderCharactersDraft();
+};
+window.removeCharacterRow = function(i) { gameCharactersDraft.splice(i, 1); renderCharactersDraft(); };
+window.updateCharacterField = function(i, field, val) { gameCharactersDraft[i][field] = val; };
+window.toggleCapo = function(i, checked) {
+  const capoCount = gameCharactersDraft.filter(c => c.isCapo).length;
+  if (checked && capoCount >= 3) { showToast('اقصى عدد كابو 3'); renderCharactersDraft(); return; }
+  gameCharactersDraft[i].isCapo = checked;
+  renderCharactersDraft();
+};
+
+// ---------- CLUES (per-game, per-round: text and/or image via imgbb and/or a video link) ----------
+const IMGBB_API_KEY = '36b0e2658ed6fad2ca48081442f1539b';
+let gameCluesDraft = [];
+function renderCluesDraft() {
+  const el = document.getElementById('clues-editor-list');
+  el.innerHTML = gameCluesDraft.map((c, i) =>
+    '<div class="item-row" style="align-items:flex-start;">' +
+      '<div class="item-main" style="display:flex;flex-direction:column;gap:6px;">' +
+        '<div style="display:flex;gap:8px;">' +
+          '<input class="f-input" style="max-width:90px;" type="number" min="1" placeholder="رقم الجولة" value="' + (c.round || '') + '" oninput="updateClueField(' + i + ',\'round\',parseInt(this.value)||1)">' +
+          '<input class="f-input" placeholder="عنوان الدليل (اختياري)" value="' + escapeHtml(c.title) + '" oninput="updateClueField(' + i + ',\'title\',this.value)">' +
+        '</div>' +
+        '<textarea class="f-textarea" placeholder="نص الدليل (اختياري لو فيه صورة/فيديو)" oninput="updateClueField(' + i + ',\'text\',this.value)">' + escapeHtml(c.text) + '</textarea>' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+          '<input type="file" accept="image/*" id="clue-img-input-' + i + '" style="display:none;" onchange="uploadClueImage(' + i + ',this)">' +
+          '<button class="btn btn-outline btn-sm" type="button" onclick="document.getElementById(\'clue-img-input-' + i + '\').click()">' + (c.imageUrl ? 'تغيير الصورة' : 'رفع صورة (imgbb)') + '</button>' +
+          (c.imageUrl ? '<img src="' + c.imageUrl + '" style="height:40px;border-radius:6px;">' : '') +
+          '<span id="clue-img-status-' + i + '" style="font-size:0.72rem;color:var(--text-muted);"></span>' +
+        '</div>' +
+        '<input class="f-input" placeholder="رابط فيديو (اختياري)" style="direction:ltr;" value="' + escapeHtml(c.videoUrl) + '" oninput="updateClueField(' + i + ',\'videoUrl\',this.value)">' +
+      '</div>' +
+      '<div class="item-actions"><button class="btn btn-danger btn-sm" type="button" onclick="removeClueRow(' + i + ')">حذف</button></div>' +
+    '</div>'
+  ).join('') || '<div class="empty-note">لا توجد ادلة بعد</div>';
+}
+window.addClueRow = function() {
+  gameCluesDraft.push({ round: 1, title: '', text: '', imageUrl: '', videoUrl: '' });
+  renderCluesDraft();
+};
+window.removeClueRow = function(i) { gameCluesDraft.splice(i, 1); renderCluesDraft(); };
+window.updateClueField = function(i, field, val) { gameCluesDraft[i][field] = val; };
+window.uploadClueImage = async function(i, inputEl) {
+  const file = inputEl.files && inputEl.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('clue-img-status-' + i);
+  statusEl.textContent = 'جارٍ الرفع...';
+  try {
+    const fd = new FormData();
+    fd.append('image', file);
+    const res = await fetch('https://api.imgbb.com/1/upload?key=' + IMGBB_API_KEY, { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json && json.success) {
+      gameCluesDraft[i].imageUrl = json.data.url;
+      statusEl.textContent = 'تم الرفع ✓';
+      renderCluesDraft();
+    } else {
+      statusEl.textContent = 'فشل رفع الصورة';
+    }
+  } catch (e) {
+    statusEl.textContent = 'فشل رفع الصورة';
+  }
+};
+
+// ---------- GAME COVER IMAGE (upload via imgbb, يملأ حقل الرابط تلقائياً) ----------
+window.uploadGameCoverImage = async function(inputEl) {
+  const file = inputEl.files && inputEl.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('game-cover-status');
+  const preview = document.getElementById('game-cover-preview');
+  statusEl.textContent = 'جارٍ الرفع...';
+  try {
+    const fd = new FormData();
+    fd.append('image', file);
+    const res = await fetch('https://api.imgbb.com/1/upload?key=' + IMGBB_API_KEY, { method: 'POST', body: fd });
+    const json = await res.json();
+    if (json && json.success) {
+      document.getElementById('game-cover').value = json.data.url;
+      preview.src = json.data.url;
+      preview.style.display = 'inline-block';
+      statusEl.textContent = 'تم الرفع ✓';
+    } else {
+      statusEl.textContent = 'فشل رفع الصورة';
+    }
+  } catch (e) {
+    statusEl.textContent = 'فشل رفع الصورة';
+  }
+};
+
+
+async function loadGames() {
+  const list = document.getElementById('games-list');
+  try {
+    const snap = await db.collection('games').get();
+    gamesCache = [];
+    if (snap.empty) { list.innerHTML = '<div class="empty-note">لا توجد العاب بعد</div>'; }
+    else {
+      list.innerHTML = '';
+      snap.forEach(d => {
+        const g = { id: d.id, ...d.data() };
+        gamesCache.push(g);
+        const isPaid = g.price && parseFloat(g.price) > 0;
+        list.innerHTML +=
+          '<div class="item-row">' +
+            '<div class="item-main">' +
+              '<div class="item-title">' + escapeHtml(g.name || 'بدون اسم') + '</div>' +
+              '<div class="item-sub">' + (isPaid ? (g.price + ' جنيه') : 'مجاني') + ' · ' + (g.rounds || 5) + ' جولات · ' + escapeHtml(g.category || '') + '</div>' +
+            '</div>' +
+            '<div class="item-actions">' +
+              '<button class="btn btn-outline btn-sm" onclick="editGame(\'' + g.id + '\')">تعديل</button>' +
+              '<button class="btn btn-danger btn-sm" onclick="deleteGame(\'' + g.id + '\')">حذف</button>' +
+            '</div>' +
+          '</div>';
+      });
+    }
+    fillGameSelects();
+  } catch (e) { list.innerHTML = '<div class="empty-note">خطأ: ' + escapeHtml(e.message) + '</div>'; }
+}
+function fillGameSelects() {
+  const roomSel = document.getElementById('room-game');
+  const couponSel = document.getElementById('coupon-game');
+  roomSel.innerHTML = gamesCache.map(g => '<option value="' + g.id + '">' + escapeHtml(g.name || g.id) + '</option>').join('');
+  couponSel.innerHTML = '<option value="">كل الالعاب</option>' + gamesCache.map(g => '<option value="' + g.id + '">' + escapeHtml(g.name || g.id) + '</option>').join('');
+}
+window.editGame = function(id) {
+  const g = gamesCache.find(x => x.id === id);
+  if (!g) return;
+  document.getElementById('game-id').value = g.id;
+  document.getElementById('game-name').value = g.name || '';
+  document.getElementById('game-category').value = g.category || '';
+  document.getElementById('game-desc').value = g.description || '';
+  document.getElementById('game-case-story').value = g.caseStory || '';
+  document.getElementById('game-cover').value = g.coverUrl || '';
+  const coverPreview = document.getElementById('game-cover-preview');
+  if (g.coverUrl) { coverPreview.src = g.coverUrl; coverPreview.style.display = 'inline-block'; }
+  else { coverPreview.src = ''; coverPreview.style.display = 'none'; }
+  document.getElementById('game-cover-status').textContent = '';
+  document.getElementById('game-price').value = g.price || '';
+  document.getElementById('game-rounds').value = g.rounds || '';
+  document.getElementById('game-playercounts').value = (g.playerCounts || []).join(',');
+  document.getElementById('game-difficulty').value = g.difficulty || 'medium';
+  document.getElementById('game-mascot').value = g.mascotUrl || '';
+  gameCharactersDraft = JSON.parse(JSON.stringify(g.characters || []));
+  gameCluesDraft = JSON.parse(JSON.stringify(g.clues || []));
+  renderCharactersDraft();
+  renderCluesDraft();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+window.deleteGame = async function(id) {
+  if (!confirm('حذف هذه اللعبة نهائياً؟')) return;
+  try { await db.collection('games').doc(id).delete(); showToast('تم الحذف'); loadGames(); }
+  catch (e) { showToast('فشل الحذف'); }
+};
+document.getElementById('btn-clear-game').addEventListener('click', () => {
+  ['game-id','game-name','game-category','game-desc','game-case-story','game-cover','game-price','game-rounds','game-playercounts','game-mascot'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('game-difficulty').value = 'medium';
+  document.getElementById('game-cover-preview').style.display = 'none';
+  document.getElementById('game-cover-preview').src = '';
+  document.getElementById('game-cover-status').textContent = '';
+  gameCharactersDraft = [];
+  gameCluesDraft = [];
+  renderCharactersDraft();
+  renderCluesDraft();
+});
+document.getElementById('btn-save-game').addEventListener('click', async () => {
+  const id = document.getElementById('game-id').value.trim();
+  const name = document.getElementById('game-name').value.trim();
+  if (!name) { showToast('اسم اللعبة مطلوب'); return; }
+  const chars = gameCharactersDraft.filter(c => c.name.trim());
+  // تحذير لو فيه نبذتين متطابقتين بالظبط - أشهر سبب إن كل اللاعبين يحسّوا إنهم بياخدوا نفس النبذة
+  const bioSeen = {};
+  let dupFound = '';
+  chars.forEach(c => {
+    const b = (c.bio || '').trim();
+    if (b && bioSeen[b]) dupFound = c.name;
+    bioSeen[b] = true;
+  });
+  if (dupFound && !confirm('في شخصيتين أو أكتر عندهم نفس النبذة بالظبط (منها "' + dupFound + '") - اللاعبين هياخدوا شخصيات مختلفة بس بنفس النص. تحب تكمل الحفظ زي ما هو؟')) return;
+  const data = {
+    name: name,
+    category: document.getElementById('game-category').value.trim(),
+    description: document.getElementById('game-desc').value.trim(),
+    caseStory: document.getElementById('game-case-story').value.trim(),
+    coverUrl: document.getElementById('game-cover').value.trim(),
+    price: parseFloat(document.getElementById('game-price').value) || 0,
+    rounds: parseInt(document.getElementById('game-rounds').value) || 5,
+    playerCounts: document.getElementById('game-playercounts').value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)),
+    difficulty: document.getElementById('game-difficulty').value || 'medium',
+    mascotUrl: document.getElementById('game-mascot').value.trim(),
+    characters: chars,
+    clues: gameCluesDraft.filter(c => c.text.trim() || c.imageUrl || c.videoUrl)
+  };
+  try {
+    if (id) await db.collection('games').doc(id).update(data);
+    else await db.collection('games').add(data);
+    showToast('تم الحفظ');
+    document.getElementById('btn-clear-game').click();
+    loadGames();
+  } catch (e) { showToast('فشل الحفظ: ' + e.message); }
+});
+document.getElementById('btn-refresh-games').addEventListener('click', loadGames);
+renderCharactersDraft();
+renderCluesDraft();
+
+// ---------- ROOMS ----------
+function generateRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+async function loadRooms() {
+  const list = document.getElementById('rooms-list');
+  try {
+    const snap = await db.collection('rooms').orderBy('code').get().catch(() => db.collection('rooms').get());
+    if (snap.empty) { list.innerHTML = '<div class="empty-note">لا توجد غرف بعد</div>'; return; }
+    list.innerHTML = '';
+    for (const d of snap.docs) {
+      const r = { id: d.id, ...d.data() };
+      const badgeClass = r.status === 'active' ? 'badge-active' : (r.status === 'ended' ? 'badge-ended' : 'badge-waiting');
+      const statusAr = r.status === 'active' ? 'نشطة' : (r.status === 'ended' ? 'منتهية' : 'انتظار');
+      let playersHtml = '<span class="item-sub">جارٍ تحميل اللاعبين...</span>';
+      list.innerHTML +=
+        '<div class="item-row" style="flex-direction:column;align-items:stretch;">' +
+          '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            '<div class="item-main">' +
+              '<div class="item-title">' + escapeHtml(r.code || r.id) + ' <span class="badge ' + badgeClass + '">' + statusAr + '</span></div>' +
+              '<div class="item-sub">' + escapeHtml(r.gameName || '') + ' · جولة ' + (r.currentRound || 0) + '/' + (r.totalRounds || 5) + '</div>' +
+            '</div>' +
+            '<div class="item-actions">' +
+              '<button class="btn btn-outline btn-sm" onclick="toggleRoomField(\'' + r.id + '\',\'status\',\'active\')">تفعيل</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="toggleRoomField(\'' + r.id + '\',\'status\',\'ended\')">إنهاء</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="toggleBoolField(\'' + r.id + '\',\'votingOpen\')">تبديل التصويت</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="nextRound(\'' + r.id + '\')">جولة +1</button>' +
+              '<button class="btn btn-danger btn-sm" onclick="deleteRoom(\'' + r.id + '\')">حذف</button>' +
+            '</div>' +
+          '</div>' +
+          '<div id="room-players-' + r.id + '" style="margin-top:8px;">' + playersHtml + '</div>' +
+        '</div>';
+      loadRoomPlayers(r.id);
+    }
+  } catch (e) { list.innerHTML = '<div class="empty-note">خطأ: ' + escapeHtml(e.message) + '</div>'; }
+}
+async function loadRoomPlayers(roomId) {
+  const el = document.getElementById('room-players-' + roomId);
+  if (!el) return;
+  try {
+    const snap = await db.collection('rooms').doc(roomId).collection('players').get();
+    if (snap.empty) { el.innerHTML = '<span class="item-sub">لا يوجد لاعبون بعد</span>'; return; }
+    let html = '';
+    snap.forEach(d => {
+      const p = d.data();
+      html += '<span class="player-chip"><span>' + escapeHtml(p.alias || p.name || d.id) + '</span>' +
+              '<button title="إخراج من اللعبة" onclick="eliminatePlayer(\'' + roomId + '\',\'' + d.id + '\')">✕</button></span>';
+    });
+    el.innerHTML = html;
+  } catch (e) { el.innerHTML = ''; }
+}
+window.eliminatePlayer = async function(roomId, uid) {
+  try {
+    await db.collection('rooms').doc(roomId).update({
+      eliminatedPlayers: firebase.firestore.FieldValue.arrayUnion(uid)
+    });
+    showToast('تم إخراج اللاعب');
+    loadRoomPlayers(roomId);
+  } catch (e) { showToast('فشل الإجراء'); }
+};
+window.toggleRoomField = async function(id, field, value) {
+  try { await db.collection('rooms').doc(id).update({ [field]: value }); showToast('تم التحديث'); loadRooms(); }
+  catch (e) { showToast('فشل التحديث'); }
+};
+window.toggleBoolField = async function(id, field) {
+  try {
+    const doc = await db.collection('rooms').doc(id).get();
+    const cur = !!(doc.data() || {})[field];
+    await db.collection('rooms').doc(id).update({ [field]: !cur });
+    showToast('تم التحديث');
+    loadRooms();
+  } catch (e) { showToast('فشل التحديث'); }
+};
+window.nextRound = async function(id) {
+  try {
+    const doc = await db.collection('rooms').doc(id).get();
+    const cur = (doc.data() || {}).currentRound || 0;
+    await db.collection('rooms').doc(id).update({ currentRound: cur + 1 });
+    showToast('تم تقديم الجولة');
+    loadRooms();
+  } catch (e) { showToast('فشل الإجراء'); }
+};
+window.deleteRoom = async function(id) {
+  if (!confirm('حذف هذه الغرفة نهائياً؟')) return;
+  try { await db.collection('rooms').doc(id).delete(); showToast('تم الحذف'); loadRooms(); }
+  catch (e) { showToast('فشل الحذف'); }
+};
+document.getElementById('btn-create-room').addEventListener('click', async () => {
+  const gameId = document.getElementById('room-game').value;
+  const game = gamesCache.find(g => g.id === gameId);
+  const totalRounds = parseInt(document.getElementById('room-total-rounds').value) || 5;
+  if (!gameId) { showToast('اختر لعبة اولاً'); return; }
+  try {
+    await db.collection('rooms').add({
+      code: generateRoomCode(),
+      gameId: gameId,
+      gameName: game ? game.name : '',
+      status: 'waiting',
+      currentRound: 0,
+      totalRounds: totalRounds,
+      roundDone: false,
+      votingOpen: false,
+      eliminatedPlayers: [],
+      capoEliminated: false,
+      capoWon: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    showToast('تم إنشاء الغرفة');
+    loadRooms();
+  } catch (e) { showToast('فشل الإنشاء: ' + e.message); }
+});
+document.getElementById('btn-refresh-rooms').addEventListener('click', loadRooms);
+
+// ---------- USERS ----------
+let usersCache = [];
+async function loadUsers() {
+  const list = document.getElementById('users-list');
+  try {
+    const snap = await db.collection('users').get();
+    usersCache = [];
+    snap.forEach(d => usersCache.push({ id: d.id, ...d.data() }));
+    renderUsers(usersCache);
+  } catch (e) { list.innerHTML = '<div class="empty-note">خطأ: ' + escapeHtml(e.message) + '</div>'; }
+}
+function renderUsers(arr) {
+  const list = document.getElementById('users-list');
+  if (!arr.length) { list.innerHTML = '<div class="empty-note">لا يوجد مستخدمون</div>'; return; }
+  list.innerHTML = arr.map(u =>
+    '<div class="item-row">' +
+      '<div class="item-main">' +
+        '<div class="item-title">' + escapeHtml(u.alias || 'PLAYER') + ' - ' + escapeHtml(((u.firstName||'')+' '+(u.lastName||'')).trim()) + '</div>' +
+        '<div class="item-sub">@' + escapeHtml(u.username||'') + ' · ' + escapeHtml(u.email||'') + ' · ' + escapeHtml(u.phone||'-') + ' · العاب مشتراة: ' + ((u.purchasedGames||[]).length) + ' · رصيد المحفظة: ' + (u.walletBalance || 0) + ' جنيه</div>' +
+      '</div>' +
+      '<div class="item-actions">' +
+        '<button class="btn btn-outline btn-sm" onclick="editUser(\'' + u.id + '\')">تعديل البيانات</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="addWalletBalance(\'' + u.id + '\')">إضافة رصيد</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="deductWalletBalance(\'' + u.id + '\')">خصم رصيد</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="deleteUser(\'' + u.id + '\')">حذف الملف</button>' +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+window.editUser = function(id) {
+  const u = usersCache.find(x => x.id === id);
+  if (!u) return;
+  document.getElementById('user-id').value = u.id;
+  document.getElementById('user-fname').value = u.firstName || '';
+  document.getElementById('user-lname').value = u.lastName || '';
+  document.getElementById('user-alias').value = u.alias || '';
+  document.getElementById('user-username').value = u.username || '';
+  document.getElementById('user-phone').value = u.phone || '';
+  document.getElementById('user-wallet').value = u.walletBalance || 0;
+  document.getElementById('user-email').value = u.email || '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+// إضافة رصيد لمحفظة مستخدم يدويًا - بدون أي تنبيه أو إشعار يوصله (زي ما طلب)، بس زيادة عادية في الرصيد
+window.addWalletBalance = async function(uid) {
+  const amountStr = prompt('قيمة الرصيد المراد إضافتها بالجنيه:');
+  if (!amountStr) return;
+  const amount = parseFloat(amountStr);
+  if (isNaN(amount) || amount <= 0) { showToast('قيمة غير صحيحة'); return; }
+  try {
+    await db.collection('users').doc(uid).update({
+      walletBalance: firebase.firestore.FieldValue.increment(amount)
+    });
+    showToast('تم إضافة ' + amount + ' جنيه للمحفظة');
+    loadUsers();
+  } catch (e) { showToast('فشلت العملية'); }
+};
+window.deductWalletBalance = async function(uid) {
+  const u = usersCache.find(x => x.id === uid);
+  const current = (u && u.walletBalance) || 0;
+  const amountStr = prompt('قيمة الرصيد المراد خصمها بالجنيه (الرصيد الحالي: ' + current + ' جنيه):');
+  if (!amountStr) return;
+  const amount = parseFloat(amountStr);
+  if (isNaN(amount) || amount <= 0) { showToast('قيمة غير صحيحة'); return; }
+  if (amount > current) {
+    if (!confirm('المبلغ أكبر من الرصيد الحالي (' + current + ' جنيه) - هيتصفر الرصيد عند صفر مش هيبقى سالب. تكمل؟')) return;
+  }
+  try {
+    const newBalance = Math.max(0, current - amount);
+    await db.collection('users').doc(uid).update({ walletBalance: newBalance });
+    showToast('تم خصم ' + amount + ' جنيه من المحفظة');
+    loadUsers();
+  } catch (e) { showToast('فشلت العملية'); }
+};
+window.deleteUser = async function(id) {
+  if (!confirm('حذف ملف هذا المستخدم من قاعدة البيانات؟ (لن يحذف حساب الدخول الخاص به)')) return;
+  try { await db.collection('users').doc(id).delete(); showToast('تم الحذف'); loadUsers(); }
+  catch (e) { showToast('فشل الحذف'); }
+};
+document.getElementById('btn-clear-user').addEventListener('click', () => {
+  ['user-id','user-fname','user-lname','user-alias','user-username','user-phone','user-wallet','user-email'].forEach(id => document.getElementById(id).value = '');
+});
+document.getElementById('btn-save-user').addEventListener('click', async () => {
+  const id = document.getElementById('user-id').value.trim();
+  if (!id) { showToast('اختار مستخدم من القائمة الاول (زرار تعديل البيانات)'); return; }
+  const data = {
+    firstName: document.getElementById('user-fname').value.trim(),
+    lastName: document.getElementById('user-lname').value.trim(),
+    alias: document.getElementById('user-alias').value.trim(),
+    username: document.getElementById('user-username').value.trim(),
+    phone: document.getElementById('user-phone').value.trim(),
+    walletBalance: parseFloat(document.getElementById('user-wallet').value) || 0
+  };
+  try {
+    await db.collection('users').doc(id).update(data);
+    showToast('تم حفظ بيانات المستخدم');
+    document.getElementById('btn-clear-user').click();
+    loadUsers();
+  } catch (e) { showToast('فشل الحفظ: ' + e.message); }
+});
+document.getElementById('user-search').addEventListener('input', (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) { renderUsers(usersCache); return; }
+  renderUsers(usersCache.filter(u =>
+    (u.alias||'').toLowerCase().includes(q) ||
+    (u.firstName||'').toLowerCase().includes(q) ||
+    (u.lastName||'').toLowerCase().includes(q) ||
+    (u.email||'').toLowerCase().includes(q) ||
+    (u.username||'').toLowerCase().includes(q)
+  ));
+});
+document.getElementById('btn-refresh-users').addEventListener('click', loadUsers);
+
+// ---------- COUPONS ----------
+let couponsCache = [];
+async function loadCoupons() {
+  const list = document.getElementById('coupons-list');
+  try {
+    const snap = await db.collection('coupons').get();
+    couponsCache = [];
+    if (snap.empty) { list.innerHTML = '<div class="empty-note">لا توجد اكواد بعد</div>'; return; }
+    list.innerHTML = '';
+    snap.forEach(d => {
+      const c = { id: d.id, ...d.data() };
+      couponsCache.push(c);
+      list.innerHTML +=
+        '<div class="item-row">' +
+          '<div class="item-main">' +
+            '<div class="item-title">' + escapeHtml(c.code||'') + ' <span class="badge ' + (c.active ? 'badge-on' : 'badge-off') + '">' + (c.active ? 'فعّال' : 'معطّل') + '</span></div>' +
+            '<div class="item-sub">خصم ' + (c.discount||0) + '%' + (c.gameId ? ' · للعبة محددة' : ' · كل الالعاب') + '</div>' +
+          '</div>' +
+          '<div class="item-actions">' +
+            '<button class="btn btn-outline btn-sm" onclick="toggleCoupon(\'' + c.id + '\',' + (!c.active) + ')">' + (c.active ? 'تعطيل' : 'تفعيل') + '</button>' +
+            '<button class="btn btn-danger btn-sm" onclick="deleteCoupon(\'' + c.id + '\')">حذف</button>' +
+          '</div>' +
+        '</div>';
+    });
+  } catch (e) { list.innerHTML = '<div class="empty-note">خطأ: ' + escapeHtml(e.message) + '</div>'; }
+}
+window.toggleCoupon = async function(id, active) {
+  try { await db.collection('coupons').doc(id).update({ active: active }); loadCoupons(); }
+  catch (e) { showToast('فشل التحديث'); }
+};
+window.deleteCoupon = async function(id) {
+  if (!confirm('حذف هذا الكود؟')) return;
+  try { await db.collection('coupons').doc(id).delete(); showToast('تم الحذف'); loadCoupons(); }
+  catch (e) { showToast('فشل الحذف'); }
+};
+document.getElementById('btn-save-coupon').addEventListener('click', async () => {
+  const code = document.getElementById('coupon-code').value.trim().toUpperCase();
+  if (!code) { showToast('الكود مطلوب'); return; }
+  try {
+    await db.collection('coupons').add({
+      code: code,
+      discount: parseFloat(document.getElementById('coupon-discount').value) || 0,
+      gameId: document.getElementById('coupon-game').value || null,
+      active: document.getElementById('coupon-active').checked
+    });
+    showToast('تم إنشاء الكود');
+    document.getElementById('coupon-code').value = '';
+    document.getElementById('coupon-discount').value = '';
+    loadCoupons();
+  } catch (e) { showToast('فشل الحفظ: ' + e.message); }
+});
+document.getElementById('btn-refresh-coupons').addEventListener('click', loadCoupons);
+
+// ---------- NOTIFICATIONS ----------
+async function loadNotifs() {
+  const list = document.getElementById('notifs-list');
+  try {
+    const snap = await db.collection('notifications').orderBy('time', 'desc').limit(30).get();
+    if (snap.empty) { list.innerHTML = '<div class="empty-note">لا توجد إشعارات بعد</div>'; return; }
+    list.innerHTML = '';
+    snap.forEach(d => {
+      const n = d.data();
+      list.innerHTML +=
+        '<div class="item-row">' +
+          '<div class="item-main">' +
+            '<div class="item-title">' + escapeHtml(n.text||'') + '</div>' +
+            '<div class="item-sub">' + formatTime(n.time) + '</div>' +
+          '</div>' +
+          '<div class="item-actions"><button class="btn btn-danger btn-sm" onclick="deleteNotif(\'' + d.id + '\')">حذف</button></div>' +
+        '</div>';
+    });
+  } catch (e) { list.innerHTML = '<div class="empty-note">خطأ: ' + escapeHtml(e.message) + '</div>'; }
+}
+window.deleteNotif = async function(id) {
+  try { await db.collection('notifications').doc(id).delete(); loadNotifs(); }
+  catch (e) { showToast('فشل الحذف'); }
+};
+document.getElementById('btn-send-notif').addEventListener('click', async () => {
+  const text = document.getElementById('notif-text').value.trim();
+  if (!text) { showToast('اكتب نص الإشعار'); return; }
+  try {
+    await db.collection('notifications').add({
+      text: text,
+      targetAll: true,
+      time: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    showToast('تم إرسال الإشعار');
+    document.getElementById('notif-text').value = '';
+    loadNotifs();
+  } catch (e) { showToast('فشل الإرسال: ' + e.message); }
+});
+document.getElementById('btn-refresh-notifs').addEventListener('click', loadNotifs);
+
+// ---------- RATINGS ----------
+async function loadRatings() {
+  const list = document.getElementById('ratings-list');
+  try {
+    const snap = await db.collection('ratings').orderBy('time', 'desc').limit(50).get();
+    if (snap.empty) { list.innerHTML = '<div class="empty-note">لا توجد تقييمات بعد</div>'; return; }
+    list.innerHTML = '';
+    snap.forEach(d => {
+      const r = d.data();
+      list.innerHTML +=
+        '<div class="item-row">' +
+          '<div class="item-main">' +
+            '<div class="item-title">' + escapeHtml(r.alias||'PLAYER') + ' - ' + '★'.repeat(r.rating||0) + '</div>' +
+            '<div class="item-sub">' + escapeHtml(r.comment||'') + '</div>' +
+            '<div class="item-sub">' + formatTime(r.time) + '</div>' +
+          '</div>' +
+        '</div>';
+    });
+  } catch (e) { list.innerHTML = '<div class="empty-note">خطأ: ' + escapeHtml(e.message) + '</div>'; }
+}
+document.getElementById('btn-refresh-ratings').addEventListener('click', loadRatings);
+
+// keyboard support for PIN
+document.addEventListener('keydown', (e) => {
+  if (document.getElementById('shell').classList.contains('show')) return;
+  if (e.key >= '0' && e.key <= '9') document.querySelector('.pin-key[data-k="' + e.key + '"]').click();
+  if (e.key === 'Backspace') document.querySelector('.pin-key[data-k="back"]').click();
+});
+</script>
+</body>
+</html>
