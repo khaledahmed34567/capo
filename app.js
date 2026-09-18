@@ -99,6 +99,12 @@ let presenceInterval = null;
 let presenceRefreshInterval = null;
 let lastNotifiedVoteEndsAtMs = null;
 let lastResultOutcome = null;
+let lastEliminationRevealKey = null;
+let eliminationRevealTimer = null;
+let gameCountdownActiveFor = null;
+let gameCountdownTimer = null;
+let currentModalPlayerUid = null;
+let currentModalPlayerAlias = null;
 let ownReady = false;
 let lastPlayersArr = [];
 let votedRound = null;
@@ -215,6 +221,10 @@ function checkDeepLink() {
   if (gameId) {
     window._pendingGameId = gameId;
   }
+  const ref = params.get('ref');
+  if (ref) {
+    window._pendingReferralCode = ref;
+  }
 }
 checkDeepLink();
 
@@ -258,6 +268,8 @@ setTimeout(() => {
       document.getElementById('bottom-nav').classList.add('visible');
       loadGames();
       loadNotifications();
+      checkDailyStreak();
+      grantReferralRewardIfNeeded();
       if (window._pendingGameId) {
         const gid = window._pendingGameId;
         window._pendingGameId = null;
@@ -302,6 +314,8 @@ function updateProfileUI() {
   document.getElementById('pf-phone').textContent = currentUserData.phone || '-';
   const walletEl = document.getElementById('wallet-balance-amount');
   if (walletEl) walletEl.textContent = (currentUserData.walletBalance || 0) + ' جنيه';
+  const streakEl = document.getElementById('streak-count-display');
+  if (streakEl) streakEl.textContent = (currentUserData.loginStreak || 0) + ' يوم';
   const avatarImg = document.getElementById('profile-avatar-img');
   if (avatarImg) {
     if (currentUserData.avatarUrl) {
@@ -313,6 +327,88 @@ function updateProfileUI() {
     }
   }
 }
+
+// ===== DAILY LOGIN STREAK =====
+async function checkDailyStreak() {
+  if (!currentUser || !currentUserData) return;
+  try {
+    const now = new Date();
+    const todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    if (currentUserData.lastLoginDate === todayStr) return; // اتفحص النهاردة قبل كده
+
+    let newStreak = 1;
+    if (currentUserData.lastLoginDate) {
+      const lastD = new Date(currentUserData.lastLoginDate + 'T00:00:00');
+      const todayD = new Date(todayStr + 'T00:00:00');
+      const diffDays = Math.round((todayD - lastD) / 86400000);
+      newStreak = (diffDays === 1) ? ((currentUserData.loginStreak || 0) + 1) : 1;
+    }
+
+    const milestones = { 3: 5, 7: 15, 14: 30, 30: 75 };
+    const reward = milestones[newStreak] || 0;
+    const updateData = { lastLoginDate: todayStr, loginStreak: newStreak };
+    if (reward > 0) updateData.walletBalance = firebase.firestore.FieldValue.increment(reward);
+    await db.collection('users').doc(currentUser.uid).update(updateData);
+
+    currentUserData.lastLoginDate = todayStr;
+    currentUserData.loginStreak = newStreak;
+    if (reward > 0) {
+      currentUserData.walletBalance = (currentUserData.walletBalance || 0) + reward;
+      updateProfileUI();
+      showToast('مبروك! ' + newStreak + ' يوم دخول متتالي - خدت ' + reward + ' جنيه في محفظتك', 'success');
+    }
+  } catch (e) { console.error(e); }
+}
+window.checkDailyStreak = checkDailyStreak;
+
+// ===== REFERRAL / INVITE =====
+function getReferralLink() {
+  const code = (currentUserData && currentUserData.username) || '';
+  return window.location.origin + window.location.pathname + '?ref=' + encodeURIComponent(code);
+}
+function copyReferralLink() {
+  if (!currentUserData || !currentUserData.username) { showToast('اكمل بياناتك الأول', 'error'); return; }
+  navigator.clipboard.writeText(getReferralLink()).then(function() {
+    showToast('تم نسخ رابط الدعوة', 'success');
+  });
+}
+window.copyReferralLink = copyReferralLink;
+function shareReferralWhatsapp() {
+  if (!currentUserData || !currentUserData.username) { showToast('اكمل بياناتك الأول', 'error'); return; }
+  const text = 'يلا نلعب Capo مع بعض! سجل من اللينك ده وهتاخد رصيد هدية: ' + getReferralLink();
+  window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+}
+window.shareReferralWhatsapp = shareReferralWhatsapp;
+
+// لما اللاعب المدعو يفعّل بريده، ناخد له وللي دعاه رصيد هدية - مرة واحدة بس لكل حساب
+async function grantReferralRewardIfNeeded() {
+  if (!currentUser || !currentUserData) return;
+  if (!currentUserData.referredBy || currentUserData.referralRewardGiven) return;
+  try {
+    const refSnap = await db.collection('users').where('username', '==', currentUserData.referredBy).limit(1).get();
+    if (refSnap.empty) {
+      await db.collection('users').doc(currentUser.uid).update({ referralRewardGiven: true });
+      currentUserData.referralRewardGiven = true;
+      return;
+    }
+    const referrerDoc = refSnap.docs[0];
+    const REWARD = 10;
+    const batch = db.batch();
+    batch.update(db.collection('users').doc(currentUser.uid), {
+      walletBalance: firebase.firestore.FieldValue.increment(REWARD),
+      referralRewardGiven: true
+    });
+    batch.update(referrerDoc.ref, {
+      walletBalance: firebase.firestore.FieldValue.increment(REWARD)
+    });
+    await batch.commit();
+    currentUserData.referralRewardGiven = true;
+    currentUserData.walletBalance = (currentUserData.walletBalance || 0) + REWARD;
+    updateProfileUI();
+    showToast('خدت ' + REWARD + ' جنيه هدية دعوة - صاحبك اللي دعاك خد نفس المبلغ', 'success');
+  } catch (e) { console.error(e); }
+}
+window.grantReferralRewardIfNeeded = grantReferralRewardIfNeeded;
 
 // ===== AVATAR UPLOAD =====
 // بنصغّر الصورة لحد 300x300 في المتصفح الاول قبل الرفع - يوفر وقت الرفع وحجم التخزين
@@ -420,11 +516,17 @@ async function doRegister() {
   try {
     const cred = await auth.createUserWithEmailAndPassword(email, pass);
     await cred.user.sendEmailVerification();
-    await db.collection('users').doc(cred.user.uid).set({
+    const newUserData = {
       firstName: fname, lastName: lname, alias: alias, email: email,
       phone: phone, username: username, uid: cred.user.uid,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(), purchasedGames: []
-    });
+    };
+    // لو دخل بلينك دعوة صاحبه، نسجل مين دعاه عشان ناخد المكافأة بعد ما يفعّل بريده
+    if (window._pendingReferralCode && window._pendingReferralCode !== username) {
+      newUserData.referredBy = window._pendingReferralCode;
+      newUserData.referralRewardGiven = false;
+    }
+    await db.collection('users').doc(cred.user.uid).set(newUserData);
     document.getElementById('verify-notice').classList.add('show');
     showToast('تم انشاء الحساب - تحقق من بريدك', 'success');
   } catch (e) {
@@ -470,6 +572,8 @@ async function checkEmailVerified() {
       document.getElementById('bottom-nav').classList.add('visible');
       loadGames();
       loadNotifications();
+      checkDailyStreak();
+      grantReferralRewardIfNeeded();
     } else {
       showToast('لسه ماتفعلش - تحقق من بريدك وحاول تاني', 'error');
     }
@@ -1133,6 +1237,14 @@ function resetRoomFeatureState() {
   lastPlayersArr = [];
   votedRound = null;
   lastNotifiedVoteEndsAtMs = null;
+  lastEliminationRevealKey = null;
+  if (eliminationRevealTimer) { clearTimeout(eliminationRevealTimer); eliminationRevealTimer = null; }
+  const elimRevealEl = document.getElementById('elim-reveal-overlay');
+  if (elimRevealEl) elimRevealEl.classList.remove('show');
+  gameCountdownActiveFor = null;
+  clearInterval(gameCountdownTimer); gameCountdownTimer = null;
+  const countdownEl = document.getElementById('game-countdown-overlay');
+  if (countdownEl) countdownEl.classList.remove('show');
   clearInterval(caseStoryTimerId); caseStoryTimerId = null;
   clearInterval(clueSpotlightTimerId); clueSpotlightTimerId = null;
   clearInterval(voteCountdownInterval); voteCountdownInterval = null;
@@ -1353,6 +1465,54 @@ async function enterSpectateRoom(roomId) {
 window.enterSpectateRoom = enterSpectateRoom;
 
 // ===== ROUND / CHARACTER LOGIC (owner-driven) =====
+// بيبدأ عد تنازلي 3-2-1 مشترك للجميع قبل ما اللعبة الفعلية تبدأ
+async function initiateGameCountdown() {
+  if (!currentRoom || !currentRoomId) return;
+  if (currentRoom.ownerUid !== currentUser.uid) { showToast('صاحب الغرفة بس يقدر يبدأ اللعبة'); return; }
+  try {
+    await db.collection('rooms').doc(currentRoomId).update({
+      gameCountdownEndsAt: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 3300))
+    });
+  } catch (e) { showToast('تعذر بدء اللعبة'); }
+}
+window.initiateGameCountdown = initiateGameCountdown;
+
+// بيتابع مؤقت العد التنازلي المشترك ويعرضه لكل حد؛ صاحب الغرفة بس اللي بيشغّل اللعبة فعليًا لما يخلص
+function checkGameCountdown() {
+  const overlay = document.getElementById('game-countdown-overlay');
+  const numEl = document.getElementById('game-countdown-number');
+  if (!overlay || !numEl) return;
+  const endsAt = currentRoom.gameCountdownEndsAt;
+  if (!endsAt) {
+    if (gameCountdownActiveFor !== null) {
+      gameCountdownActiveFor = null;
+      clearInterval(gameCountdownTimer);
+      overlay.classList.remove('show');
+    }
+    return;
+  }
+  const endsAtMs = endsAt.toMillis ? endsAt.toMillis() : endsAt;
+  if (gameCountdownActiveFor === endsAtMs) return; // العداد ده شغال أصلاً
+  gameCountdownActiveFor = endsAtMs;
+  overlay.classList.add('show');
+  clearInterval(gameCountdownTimer);
+  function tick() {
+    const remain = Math.ceil((endsAtMs - Date.now()) / 1000);
+    if (remain <= 0) {
+      clearInterval(gameCountdownTimer);
+      overlay.classList.remove('show');
+      gameCountdownActiveFor = null;
+      if (currentRoom && currentRoom.ownerUid === currentUser.uid && currentRoom.status === 'waiting') {
+        startGameInRoom();
+      }
+      return;
+    }
+    numEl.textContent = remain;
+  }
+  tick();
+  gameCountdownTimer = setInterval(tick, 200);
+}
+
 async function startGameInRoom() {
   if (!currentRoom || !currentRoomId) return;
   if (currentRoom.ownerUid !== currentUser.uid) { showToast('صاحب الغرفة بس يقدر يبدأ اللعبة'); return; }
@@ -1403,6 +1563,7 @@ async function startGameInRoom() {
       capoEliminated: false,
       capoWon: false,
       capoCount: capoCount,
+      gameCountdownEndsAt: firebase.firestore.FieldValue.delete(),
       totalRounds: game.rounds || 5,
       gameName: game.name || '',
       caseStory: game.caseStory || '',
@@ -1495,6 +1656,15 @@ async function endRoundInRoom() {
       eliminatedAlias: eliminatedAlias,
       votes: voteRecords
     });
+    // بث فوري لكل اللاعبين: اللي خرج كان بريء ولا كابو - شاشة تظهر لمدة 10 ثواني للجميع
+    const eliminatedPlayerData = allPlayers.find(p => p.uid === eliminatedUid);
+    batch.update(roomRef, {
+      lastElimination: {
+        alias: eliminatedAlias,
+        isCapo: !!(eliminatedPlayerData && eliminatedPlayerData.isCapo),
+        key: Date.now()
+      }
+    });
 
     if (remainingCapos.length === 0) {
       // كل الكابوهات اتصيدوا - الأبرياء كسبوا
@@ -1569,6 +1739,8 @@ async function playNextGameInRoom() {
     const gameDoc = await db.collection('games').doc(nextGameId).get();
     const game = gameDoc.exists ? gameDoc.data() : {};
     const playersSnap = await db.collection('rooms').doc(currentRoomId).collection('players').get();
+    // بنشيل تقرير الجولات بتاع اللعبة اللي خلصت عشان ملتخبطش مع أرقام جولات اللعبة الجديدة
+    const oldVoteHistSnap = await db.collection('rooms').doc(currentRoomId).collection('voteHistory').get();
     // نحاول نسيب نفس عدد اللاعبين الحالي لو مناسب للعبة الجديدة، وإلا نرجع لأول عدد مسموح بيها
     const validCounts = (game.playerCounts && game.playerCounts.length) ? game.playerCounts : null;
     let nextMaxPlayers = validCounts ? validCounts[0] : null;
@@ -1577,6 +1749,7 @@ async function playNextGameInRoom() {
     playersSnap.forEach(d => {
       batch.delete(d.ref.collection('private').doc('char'));
     });
+    oldVoteHistSnap.forEach(d => batch.delete(d.ref));
     batch.update(db.collection('rooms').doc(currentRoomId), {
       currentGameIndex: nextIndex,
       currentGameId: nextGameId,
@@ -1597,6 +1770,26 @@ async function playNextGameInRoom() {
   } catch (e) { console.error(e); }
 }
 window.playNextGameInRoom = playNextGameInRoom;
+
+// بيعرض للجميع (مش بس اللي خرج) هل اللاعب اللي طلع كان بريء ولا كابو - لمدة 10 ثواني وبعدين يقفل لوحده
+function showEliminationReveal(info) {
+  const overlay = document.getElementById('elim-reveal-overlay');
+  if (!overlay) return;
+  document.getElementById('elim-reveal-alias').textContent = info.alias || 'لاعب';
+  const roleEl = document.getElementById('elim-reveal-role');
+  if (info.isCapo) {
+    roleEl.textContent = 'كان كابو!';
+    roleEl.style.color = 'var(--accent-red-bright)';
+  } else {
+    roleEl.textContent = 'كان بريء';
+    roleEl.style.color = '#7ecba4';
+  }
+  overlay.classList.add('show');
+  if (eliminationRevealTimer) clearTimeout(eliminationRevealTimer);
+  eliminationRevealTimer = setTimeout(function() {
+    overlay.classList.remove('show');
+  }, 10000);
+}
 
 function showCharacterReveal(p) {
   const overlay = document.getElementById('char-reveal-overlay');
@@ -1640,8 +1833,18 @@ function requestNotifPermissionOnce() {
   } catch (e) {}
 }
 
-function setupRoomListeners() {
+async function setupRoomListeners() {
   clearRoomListeners();
+
+  // نجيب حالة الغرفة الحالية مرة واحدة الأول عشان لو فيه "آخر إقصاء" قديم من قبل ما ندخل، منعرضوش وكأنه لسه حصل دلوقتي
+  try {
+    const seedSnap = await db.collection('rooms').doc(currentRoomId).get();
+    if (seedSnap.exists) {
+      const d = seedSnap.data();
+      if (d.lastElimination && d.lastElimination.key) lastEliminationRevealKey = d.lastElimination.key;
+    }
+  } catch (e) {}
+  if (!currentRoomId) return; // ممكن يكون اتعمله exitRoom وإحنا لسه بنستنى الفيتش فوق
 
   // presence - نحدّث وقت آخر نشاط كل 20 ثانية عشان باقي اللاعبين يشوفوا مين متصل دلوقتي فعلاً
   if (!isTrueSpectator && currentUser) {
@@ -1696,6 +1899,13 @@ function setupRoomListeners() {
     }
   }, function() { /* لو مش كابو، Firestore Rules هترفض القراءة - نتجاهل بهدوء */ });
   roomListeners.push(unsub2b);
+
+  // جدول الجولات الحي - بيتحدث أول ما كل جولة تتحسم (مش بس في نهاية اللعبة)
+  const voteHistQ = db.collection('rooms').doc(currentRoomId).collection('voteHistory').orderBy('round', 'asc');
+  const unsub2c = voteHistQ.onSnapshot((snap) => {
+    renderRoundHistoryStrip(snap);
+  }, function() {});
+  roomListeners.push(unsub2c);
 
   // players
   const unsub3 = db.collection('rooms').doc(currentRoomId).collection('players').onSnapshot((snap) => {
@@ -1756,6 +1966,8 @@ function updateRoomUI() {
   const status = currentRoom.status;
   const round = currentRoom.currentRound || 0;
   const totalRounds = currentRoom.totalRounds || 5;
+
+  checkGameCountdown();
 
   // round indicator
   if (round > 0) {
@@ -1841,6 +2053,12 @@ function updateRoomUI() {
   if (capoTabEl) {
     const showCapoTab = ownIsCapo && !isEliminated && !isTrueSpectator && (currentRoom.capoCount || 0) > 1;
     capoTabEl.style.display = showCapoTab ? '' : 'none';
+  }
+
+  // بث "اللي خرج كان بريء ولا كابو" - بيظهر لكل حد في الغرفة لمدة 10 ثواني أول ما يوصله
+  if (currentRoom.lastElimination && currentRoom.lastElimination.key && currentRoom.lastElimination.key !== lastEliminationRevealKey) {
+    lastEliminationRevealKey = currentRoom.lastElimination.key;
+    showEliminationReveal(currentRoom.lastElimination);
   }
 
   // check if capo was eliminated (game over early)
@@ -1972,17 +2190,23 @@ function hideClueSpotlight() {
 // ===== VOTE COUNTDOWN =====
 function startVoteCountdown(voteEndsAtTs) {
   const el = document.getElementById('vote-timer');
+  const barEl = document.getElementById('global-vote-timer-bar');
+  const barText = document.getElementById('global-vote-timer-text');
   if (!el) return;
   if (!voteEndsAtTs) { stopVoteCountdown(); return; }
   const endsAtMs = voteEndsAtTs.toMillis ? voteEndsAtTs.toMillis() : voteEndsAtTs;
   clearInterval(voteCountdownInterval);
   el.style.display = 'block';
+  if (barEl) barEl.style.display = 'flex';
   function tick() {
     const remainSec = Math.max(0, Math.ceil((endsAtMs - Date.now()) / 1000));
     const mm = Math.floor(remainSec / 60);
     const ss = remainSec % 60;
-    el.textContent = mm + ':' + String(ss).padStart(2, '0');
+    const timeStr = mm + ':' + String(ss).padStart(2, '0');
+    el.textContent = timeStr;
     el.classList.toggle('urgent', remainSec > 0 && remainSec <= 15);
+    if (barText) barText.textContent = timeStr;
+    if (barEl) barEl.classList.toggle('urgent', remainSec > 0 && remainSec <= 15);
     if (remainSec <= 0) clearInterval(voteCountdownInterval);
   }
   tick();
@@ -1993,6 +2217,8 @@ function stopVoteCountdown() {
   voteCountdownInterval = null;
   const el = document.getElementById('vote-timer');
   if (el) el.style.display = 'none';
+  const barEl = document.getElementById('global-vote-timer-bar');
+  if (barEl) barEl.style.display = 'none';
 }
 
 // ===== READY-UP (waiting room feature) =====
@@ -2072,9 +2298,14 @@ function renderChatMsg(msg, container) {
   const isMe = msg.uid === currentUser.uid;
   const isSystem = msg.type === 'system';
   const isLastWords = msg.type === 'lastwords';
+  const isAccusation = msg.type === 'accusation';
   const div = document.createElement('div');
-  div.className = 'chat-msg' + (isSystem ? ' system' : isMe ? ' mine' : ' other') + (isLastWords ? ' last-words' : '');
-  if (!isSystem) {
+  div.className = 'chat-msg' + (isSystem ? ' system' : isMe ? ' mine' : ' other') + (isLastWords ? ' last-words' : '') + (isAccusation ? ' accusation' : '');
+  if (isAccusation) {
+    div.innerHTML = '<div class="chat-msg-sender">اتهام علني</div>'
+      + '<div>' + escapeHtml(msg.alias || '') + ' يتهم <strong>' + escapeHtml(msg.text || '') + '</strong> بإنه الكابو</div>'
+      + '<div class="chat-msg-time">' + formatTime(msg.time) + '</div>';
+  } else if (!isSystem) {
     div.innerHTML = '<div class="chat-msg-sender">' + (isLastWords ? 'الكلمة الأخيرة لـ ' : '') + (msg.alias || '') + '</div>'
       + '<div>' + escapeHtml(msg.text || '') + '</div>'
       + '<div class="chat-msg-time">' + formatTime(msg.time) + '</div>';
@@ -2085,6 +2316,22 @@ function renderChatMsg(msg, container) {
 }
 
 // شات سري بين الكابوهات بس - نفس فكرة الشات العادي، بس لمستند تاني، وبيتقفل لو اتقصيت
+// جدول الجولات الحي - شريط أفقي فوق التابات يعرض نتيجة كل جولة اتحسمت لحد دلوقتي
+function renderRoundHistoryStrip(snap) {
+  const strip = document.getElementById('round-history-strip');
+  if (!strip) return;
+  if (snap.empty) { strip.style.display = 'none'; strip.innerHTML = ''; return; }
+  strip.style.display = 'flex';
+  strip.innerHTML = snap.docs.map(function(d) {
+    const h = d.data();
+    if (h.tie) {
+      return '<div class="round-history-item rh-tie"><div class="rh-round">ج' + h.round + '</div><div class="rh-name">تعادل</div></div>';
+    }
+    return '<div class="round-history-item"><div class="rh-round">ج' + h.round + '</div><div class="rh-name">' + escapeHtml(h.eliminatedAlias || '') + '</div></div>';
+  }).join('');
+  strip.scrollLeft = strip.scrollWidth;
+}
+
 async function sendCapoChat() {
   if (isEliminated || isTrueSpectator || !ownIsCapo) return;
   if (!currentRoomId || !currentUser) return;
@@ -2106,6 +2353,86 @@ async function sendCapoChat() {
   }
 }
 window.sendCapoChat = sendCapoChat;
+
+// ===== REPORT / KICK VOTE (منفصل تمامًا عن تصويت الكابو) =====
+function reportCurrentModalPlayer() {
+  if (!currentModalPlayerUid) return;
+  const alias = currentModalPlayerAlias || 'اللاعب';
+  if (!confirm('تبلغ عن ' + alias + ' بسلوك مسيء؟ لو وصلت البلاغات لأغلب اللاعبين النشطين هيتطرد من الغرفة فورًا.')) return;
+  reportPlayer(currentModalPlayerUid, alias);
+  closePlayerCard();
+}
+window.reportCurrentModalPlayer = reportCurrentModalPlayer;
+
+async function reportPlayer(uid, alias) {
+  if (!currentRoomId || !currentUser || !uid || uid === currentUser.uid) return;
+  try {
+    const reportRef = db.collection('rooms').doc(currentRoomId).collection('reports').doc(uid);
+    const playerRef = db.collection('rooms').doc(currentRoomId).collection('players').doc(uid);
+    const activeCount = activePlayerCount();
+    const threshold = Math.max(3, Math.ceil(activeCount / 2));
+    let kicked = false;
+    let alreadyReported = false;
+    await db.runTransaction(async (tx) => {
+      const reportSnap = await tx.get(reportRef);
+      let reporters = reportSnap.exists ? (reportSnap.data().reporterUids || []) : [];
+      if (reporters.indexOf(currentUser.uid) !== -1) { alreadyReported = true; return; }
+      reporters = reporters.concat([currentUser.uid]);
+      if (reporters.length >= threshold) {
+        tx.delete(playerRef);
+        tx.delete(playerRef.collection('private').doc('char'));
+        tx.delete(reportRef);
+        kicked = true;
+      } else {
+        tx.set(reportRef, { reporterUids: reporters, targetAlias: alias });
+      }
+    });
+    if (alreadyReported) { showToast('انت بلّغت عن اللاعب ده قبل كده'); return; }
+    if (kicked) {
+      db.collection('rooms').doc(currentRoomId).collection('chat').add({
+        uid: 'system', alias: 'النظام',
+        text: 'تم طرد ' + alias + ' من الغرفة بعد بلاغات من أغلب اللاعبين النشطين',
+        type: 'system', time: firebase.firestore.FieldValue.serverTimestamp()
+      }).catch(function() {});
+      showToast('وصل العدد المطلوب من البلاغات - تم طرد اللاعب', 'success');
+    } else {
+      showToast('تم إرسال بلاغك');
+    }
+  } catch (e) { console.error(e); showToast('تعذر إرسال البلاغ', 'error'); }
+}
+window.reportPlayer = reportPlayer;
+
+// ===== PUBLIC ACCUSATION =====
+function openAccuseModal() {
+  if (isTrueSpectator) return;
+  const list = document.getElementById('accuse-candidates-list');
+  const eliminatedSet = (currentRoom && currentRoom.eliminatedPlayers) || [];
+  const candidates = lastPlayersArr.filter(p => p.uid !== currentUser.uid && eliminatedSet.indexOf(p.uid) === -1);
+  if (!candidates.length) { showToast('مفيش لاعبين تانيين تتهمهم دلوقتي'); return; }
+  list.innerHTML = candidates.map(function(p) {
+    return '<button class="btn-coupon" onclick="sendAccusation(\'' + escapeHtml(p.alias || 'لاعب') + '\')">' + escapeHtml(p.alias || 'لاعب') + '</button>';
+  }).join('');
+  document.getElementById('accuse-modal').classList.add('show');
+}
+window.openAccuseModal = openAccuseModal;
+function closeAccuseModal() {
+  document.getElementById('accuse-modal').classList.remove('show');
+}
+window.closeAccuseModal = closeAccuseModal;
+async function sendAccusation(targetAlias) {
+  closeAccuseModal();
+  if (isEliminated || isTrueSpectator || !currentRoomId || !currentUser) return;
+  try {
+    await db.collection('rooms').doc(currentRoomId).collection('chat').add({
+      uid: currentUser.uid,
+      alias: (currentUserData && currentUserData.alias) || 'PLAYER',
+      text: targetAlias,
+      type: 'accusation',
+      time: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } catch (e) { showToast('تعذر إرسال الاتهام', 'error'); }
+}
+window.sendAccusation = sendAccusation;
 
 async function sendChat() {
   if (isEliminated && !isSpectator) return;
@@ -2367,6 +2694,12 @@ function showGameEnded() {
   if (reportBtn) reportBtn.style.display = (currentRoom && currentRoom.finalRoles) ? 'block' : 'none';
   if (reportWrap) reportWrap.style.display = 'none';
   if (reportBtn) reportBtn.textContent = 'شوف تقرير اللعبة';
+
+  const playAgainBtn = document.getElementById('btn-play-again');
+  if (playAgainBtn) {
+    const hasMoreGames = currentRoom && currentRoom.gameIds && currentRoom.gameIds.length > 1;
+    playAgainBtn.textContent = hasMoreGames ? 'اللعبة التالية' : 'العب مرة اخرى';
+  }
 }
 
 // ===== SHARE RESULT AS IMAGE =====
@@ -2613,6 +2946,8 @@ function switchRoomTab(id, el) {
 
 // ===== PLAYER CARD =====
 function openPlayerCard(uid, alias, name, bio, avatarUrl) {
+  currentModalPlayerUid = uid;
+  currentModalPlayerAlias = alias;
   document.getElementById('modal-alias').textContent = alias.toUpperCase();
   document.getElementById('modal-name').textContent = name;
   document.getElementById('modal-bio').textContent = bio || 'لا توجد نبذة';
@@ -2621,6 +2956,8 @@ function openPlayerCard(uid, alias, name, bio, avatarUrl) {
     if (avatarUrl) { img.src = avatarUrl; img.classList.add('is-photo'); }
     else { img.src = 'https://i.ibb.co/NdHgx21b/logo.png'; img.classList.remove('is-photo'); }
   }
+  const reportBtn = document.getElementById('btn-report-player');
+  if (reportBtn) reportBtn.style.display = (uid !== currentUser.uid && !isTrueSpectator) ? 'block' : 'none';
   document.getElementById('player-card-modal').classList.add('show');
 }
 function closePlayerCard(e) {
